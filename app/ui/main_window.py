@@ -17,6 +17,7 @@ from app.indexing.paragraph_indexer import ParagraphIndexer
 from app.indexing.citations_indexer import CitationsIndexer
 from app.version import APP_NAME, APP_NAME_SHORT, APP_VERSION
 from app.ui.theme import ThemeManager
+from app.paths import get_db_path
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
 
@@ -24,7 +25,7 @@ ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
 class MainWindow(QMainWindow):
     """Janela Principal do Aplicativo Desktop Localizador Inteligente."""
 
-    def __init__(self):
+    def __init__(self, db_conn: DatabaseConnection = None):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME_SHORT} — v{APP_VERSION}")
         self.resize(1200, 800)
@@ -35,7 +36,9 @@ class MainWindow(QMainWindow):
 
         self.theme = ThemeManager()
 
-        self.db_conn = DatabaseConnection("data/locator.db")
+        # Se nenhuma conexão for passada (ex.: uso direto fora de app/main.py),
+        # cria uma usando o mesmo caminho "seguro para escrita" (get_db_path).
+        self.db_conn = db_conn if db_conn is not None else DatabaseConnection(get_db_path())
         self.search_engine = SearchEngine(self.db_conn)
 
         self._init_ui()

@@ -10,6 +10,7 @@ from app.database.schema import DatabaseSchemaManager
 from app.ui.main_window import MainWindow
 from app.version import APP_NAME_SHORT, APP_VERSION
 from app.updater import check_for_updates_async, download_and_apply_update
+from app.paths import get_db_path
 
 
 def main():
@@ -17,13 +18,16 @@ def main():
     app.setApplicationName(APP_NAME_SHORT)
     app.setApplicationVersion(APP_VERSION)
 
-    # Inicializa Conexão e Schema do Banco de Dados
-    db_conn = DatabaseConnection("data/locator.db")
+    # Inicializa Conexão e Schema do Banco de Dados. get_db_path() decide o
+    # local certo: %LOCALAPPDATA%\Localizador\data (gravável sem precisar de
+    # admin) quando empacotado, ou a pasta data/ do projeto em desenvolvimento.
+    db_conn = DatabaseConnection(get_db_path())
     schema_mgr = DatabaseSchemaManager(db_conn)
     schema_mgr.initialize_database()
 
-    # Inicia a Interface Gráfica
-    window = MainWindow()
+    # Inicia a Interface Gráfica (reaproveita a mesma conexão, em vez de cada
+    # parte do app abrir a sua própria)
+    window = MainWindow(db_conn=db_conn)
     window.show()
 
     # Verifica atualizações em segundo plano (não bloqueia a abertura do app).
