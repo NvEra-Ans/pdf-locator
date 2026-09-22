@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+build/
+dist/
+*.spec
+
+# Banco de dados local (dados indexados) - fica só na máquina de cada um,
+# não vai para o repositório (pode conter conteúdo dos PDFs importados).
+data/*.db

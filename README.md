@@ -1,0 +1,70 @@
+# Localizador de Citações — A Voz do Último Dia
+
+Aplicativo Desktop local para Windows capaz de indexar e realizar pesquisas estruturadas em coleções de documentos e livros PDF.
+
+Versão atual: **2.0.0** (ver `app/version.py`)
+
+## Funcionalidades
+- **Arquitetura por Perfis de Documentos (`DocumentIndexProfile`)**:
+  - **Perfil Tipo A (Livro Estruturado)**: Busca por Página, Parágrafo, Texto Exato e Aproximado.
+  - **Perfil Tipo B (Livro de Citações/Extratos)**: Busca por Página, Número do Extrato, Texto e Metadados.
+- **Indexação de Alta Performance**: Utiliza SQLite FTS5 para buscas textuais em milissegundos.
+- **Leitura em ordem de colunas real**: PDFs em layout de 2 colunas são indexados na ordem de leitura correta (coluna esquerda inteira, depois a direita), evitando cortar parágrafos/extratos que atravessam a quebra de coluna (`analyzer/layout.py`).
+- **Busca Aproximada (Fuzzy)**: Integração com RapidFuzz para tolerar erros de OCR e diferenças de acentuação.
+- **Interface renovada**: cabeçalho com identidade visual, modo claro/escuro, fonte maior e mais legível no painel de resultado.
+- **Atualização automática**: ao abrir, o app verifica se há uma versão mais nova publicada no GitHub e se oferece para se auto-atualizar (`app/updater.py`).
+- **Visualizador e Exportador**: Permite copiar referências formatadas e texto selecionado com um clique.
+
+## Instalação e Execução (Desenvolvimento)
+1. Instale o Python 3.12+.
+2. Instale as dependências:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Rode o app:
+   ```bash
+   python app/main.py
+   ```
+
+## Gerando o executável Windows
+```
+build_windows.bat
+```
+O executável fica em `dist/Localizador/Localizador.exe`.
+
+## Publicando uma nova versão (auto-update para quem já tem o app instalado)
+
+1. Atualize `APP_VERSION` em `app/version.py` (ex.: `"2.1.0"`).
+2. Confirme e faça push das mudanças:
+   ```bash
+   git add -A
+   git commit -m "Versão 2.1.0"
+   git push
+   ```
+3. Crie e envie a tag da versão (precisa começar com `v` e seguir `MAJOR.MINOR.PATCH`):
+   ```bash
+   git tag v2.1.0
+   git push origin v2.1.0
+   ```
+4. O workflow `.github/workflows/release.yml` builda o `.exe` automaticamente numa máquina Windows do GitHub Actions, compacta em `Localizador-Windows.zip` e publica um GitHub Release.
+5. Todo app já instalado que for aberto a partir de agora vai detectar essa versão nova (comparando com `app/version.py` local), perguntar ao usuário se quer atualizar e, se aceito, baixar e substituir os arquivos sozinho, reabrindo o app já atualizado.
+
+> Isso depende de `GITHUB_OWNER`/`GITHUB_REPO` em `app/version.py` apontarem para o repositório certo, e de o repositório ser público (ou o updater precisaria de autenticação, o que não está implementado nesta versão).
+
+## Estrutura
+```
+app/
+  assets/        Ícone e logo do aplicativo
+  database/      Conexão SQLite e schema
+  indexing/      Indexadores por perfil de documento (Parágrafos / Extratos)
+  models/        Modelos de dados (SearchResult, ProfileType, ...)
+  search/        Motor de busca (FTS5 + fuzzy)
+  ui/            Interface (janela principal, temas claro/escuro)
+  main.py        Ponto de entrada
+  updater.py     Verificação e aplicação de atualizações via GitHub Releases
+  version.py     Nome e versão do app
+analyzer/
+  pattern_detector.py   Detecção de números de página/parágrafo/extrato
+  layout.py             Reordenação de blocos em ordem de leitura (colunas)
+.github/workflows/release.yml   Build + publicação automática do release
+```

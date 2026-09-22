@@ -1,0 +1,59 @@
+name: Build e Publicar Release (Windows)
+
+# Dispara sempre que uma tag de versao "vX.Y.Z" for enviada ao repositorio.
+# Fluxo de atualizacao:
+#   1. git tag v2.1.0 && git push origin v2.1.0
+#   2. Este workflow builda o .exe (PyInstaller) numa maquina Windows do GitHub
+#   3. Compacta dist/Localizador em Localizador-Windows.zip
+#   4. Publica um GitHub Release com esse .zip anexado
+#   5. Os apps ja instalados detectam a nova versao no proximo start
+#      (app/updater.py consulta a API de releases) e se atualizam sozinhos.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build do executavel (PyInstaller)
+        run: |
+          pyinstaller --noconfirm --onedir --windowed `
+            --name "Localizador" `
+            --icon "app/assets/icon.ico" `
+            --add-data "data;data" `
+            --add-data "app/assets;app/assets" `
+            --hidden-import "PySide6" `
+            --hidden-import "fitz" `
+            --hidden-import "rapidfuzz" `
+            app/main.py
+
+      - name: Compactar build
+        run: |
+          Compress-Archive -Path "dist/Localizador/*" -DestinationPath "Localizador-Windows.zip"
+
+      - name: Publicar GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Localizador-Windows.zip
+          generate_release_notes: true
