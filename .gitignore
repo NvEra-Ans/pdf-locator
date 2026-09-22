@@ -5,6 +5,7 @@ __pycache__/
 venv/
 build/
 dist/
+dist_installer/
 *.spec
 
 # Banco de dados local (dados indexados) - fica só na máquina de cada um,
