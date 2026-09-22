@@ -162,7 +162,16 @@ class MainWindow(QMainWindow):
 
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Página", "Parágrafo / Extrato", "Match", "Trecho Encontrado"])
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        header = self.table.horizontalHeader()
+        # Colunas 0-2 (Página, Parágrafo/Extrato, Match) se ajustam ao próprio
+        # conteúdo/cabeçalho, em vez de ficar com a largura padrão fixa do Qt
+        # (que cortava o texto do cabeçalho com a fonte maior). A última
+        # coluna (Trecho Encontrado) ocupa o espaço restante.
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setMinimumSectionSize(90)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.verticalHeader().setDefaultSectionSize(30)
