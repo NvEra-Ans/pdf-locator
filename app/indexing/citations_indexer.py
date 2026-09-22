@@ -50,33 +50,40 @@ class CitationsIndexer(BaseIndexer):
                 # um extrato que começa na coluna esquerda e continua na direita.
                 blocks = order_blocks_reading_order(raw_blocks, width, height)
 
+                # IMPORTANTE: o teste de "isso começa um novo extrato numerado?"
+                # precisa ser feito LINHA por LINHA, não por bloco inteiro. O
+                # PyMuPDF às vezes agrupa, no mesmo bloco, a linha de atribuição
+                # do extrato anterior ("Mire hacia Jesús, Pág. X...") seguida,
+                # na linha de baixo, já pelo início do próximo extrato ("1058 -
+                # ..."). Testar o bloco inteiro concatenado faz o "1058" cair no
+                # meio da string e nunca bater no padrão (que é ancorado no
+                # início), fundindo os dois extratos em um só.
                 for b in blocks:
-                    block_text = ""
+                    bbox = b.get("bbox")
                     for line in b.get("lines", []):
-                        block_text += "".join([s.get("text", "") for s in line.get("spans", [])]) + " "
-                    block_text = block_text.strip()
-                    if not block_text:
-                        continue
+                        line_text = "".join([s.get("text", "") for s in line.get("spans", [])]).strip()
+                        if not line_text:
+                            continue
 
-                    res = PatternDetector.analyze_text_span(block_text, b.get("bbox"), width, height)
+                        res = PatternDetector.analyze_text_span(line_text, bbox, width, height)
 
-                    # Ainda não há entrada ativa: abre uma entrada de introdução/capa
-                    if active_entry_id is None:
-                        active_entry_id = self._start_entry(cursor, doc_id, "Intro/Capa")
-                        active_entry_text = []
+                        # Ainda não há entrada ativa: abre uma entrada de introdução/capa
+                        if active_entry_id is None:
+                            active_entry_id = self._start_entry(cursor, doc_id, "Intro/Capa")
+                            active_entry_text = []
 
-                    # Bloco inicia uma nova entrada numerada -> fecha a anterior e abre esta
-                    if res["is_paragraph_candidate"]:
-                        self._close_entry(cursor, active_entry_id, doc_id, printed_label, active_entry_text)
-                        active_entry_id = self._start_entry(cursor, doc_id, res["detected_paragraph_num"])
-                        active_entry_text = []
+                        # Linha inicia uma nova entrada numerada -> fecha a anterior e abre esta
+                        if res["is_paragraph_candidate"]:
+                            self._close_entry(cursor, active_entry_id, doc_id, printed_label, active_entry_text)
+                            active_entry_id = self._start_entry(cursor, doc_id, res["detected_paragraph_num"])
+                            active_entry_text = []
 
-                    active_entry_text.append(block_text)
+                        active_entry_text.append(line_text)
 
-                    cursor.execute(
-                        "INSERT INTO entry_chunks (entry_id, page_id, chunk_text, bbox) VALUES (?, ?, ?, ?)",
-                        (active_entry_id, page_db_id, block_text, json.dumps(b.get("bbox")))
-                    )
+                        cursor.execute(
+                            "INSERT INTO entry_chunks (entry_id, page_id, chunk_text, bbox) VALUES (?, ?, ?, ?)",
+                            (active_entry_id, page_db_id, line_text, json.dumps(bbox))
+                        )
 
             # Fecha a última entrada pendente ao final do documento
             if active_entry_id is not None:

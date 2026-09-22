@@ -50,37 +50,43 @@ class ParagraphIndexer(BaseIndexer):
                 current_para_text = []
                 current_bbox = None
 
+                # IMPORTANTE: o teste de "isso começa um novo parágrafo?" precisa
+                # ser feito LINHA por LINHA, não por bloco inteiro — o PyMuPDF às
+                # vezes agrupa no mesmo bloco o fim de um parágrafo e o início do
+                # próximo (ex.: uma linha de atribuição/rodapé seguida, na linha
+                # de baixo, já pelo número do parágrafo seguinte). Testar o bloco
+                # inteiro concatenado faz esse número cair no meio da string e
+                # nunca bater no padrão (ancorado no início), fundindo os dois
+                # parágrafos em um só.
                 for b in blocks:
-                    block_text = ""
+                    bbox = b.get("bbox")
                     for line in b.get("lines", []):
-                        block_text += "".join([s.get("text", "") for s in line.get("spans", [])]) + " "
+                        line_text = "".join([s.get("text", "") for s in line.get("spans", [])]).strip()
+                        if not line_text:
+                            continue
 
-                    block_text = block_text.strip()
-                    if not block_text:
-                        continue
+                        res = PatternDetector.analyze_text_span(line_text, bbox, width, height)
+                        if res["is_paragraph_candidate"]:
+                            # Salva parágrafo anterior
+                            if current_para_num and current_para_text:
+                                full_text = " ".join(current_para_text)
+                                norm_text = self.normalize_text(full_text)
+                                cursor.execute(
+                                    "INSERT INTO paragraphs (page_id, paragraph_number, text, normalized_text, bbox) VALUES (?, ?, ?, ?, ?)",
+                                    (page_db_id, current_para_num, full_text, norm_text, json.dumps(current_bbox))
+                                )
+                                para_db_id = cursor.lastrowid
+                                cursor.execute(
+                                    "INSERT INTO fts_paragraphs VALUES (?, ?, ?, ?, ?)",
+                                    (para_db_id, doc_id, printed_label, current_para_num, norm_text)
+                                )
 
-                    res = PatternDetector.analyze_text_span(block_text, b.get("bbox"), width, height)
-                    if res["is_paragraph_candidate"]:
-                        # Salva parágrafo anterior
-                        if current_para_num and current_para_text:
-                            full_text = " ".join(current_para_text)
-                            norm_text = self.normalize_text(full_text)
-                            cursor.execute(
-                                "INSERT INTO paragraphs (page_id, paragraph_number, text, normalized_text, bbox) VALUES (?, ?, ?, ?, ?)",
-                                (page_db_id, current_para_num, full_text, norm_text, json.dumps(current_bbox))
-                            )
-                            para_db_id = cursor.lastrowid
-                            cursor.execute(
-                                "INSERT INTO fts_paragraphs VALUES (?, ?, ?, ?, ?)",
-                                (para_db_id, doc_id, printed_label, current_para_num, norm_text)
-                            )
-
-                        current_para_num = res["detected_paragraph_num"]
-                        current_para_text = [block_text]
-                        current_bbox = b.get("bbox")
-                    else:
-                        if current_para_num:
-                            current_para_text.append(block_text)
+                            current_para_num = res["detected_paragraph_num"]
+                            current_para_text = [line_text]
+                            current_bbox = bbox
+                        else:
+                            if current_para_num:
+                                current_para_text.append(line_text)
 
                 # Salva o último parágrafo da página se houver
                 if current_para_num and current_para_text:

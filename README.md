@@ -2,7 +2,7 @@
 
 Aplicativo Desktop local para Windows capaz de indexar e realizar pesquisas estruturadas em coleções de documentos e livros PDF.
 
-Versão atual: **2.1.1** (ver `app/version.py`)
+Versão atual: **2.1.2** (ver `app/version.py`)
 
 ## Funcionalidades
 - **Arquitetura por Perfis de Documentos (`DocumentIndexProfile`)**:
@@ -10,6 +10,7 @@ Versão atual: **2.1.1** (ver `app/version.py`)
   - **Perfil Tipo B (Livro de Citações/Extratos)**: Busca por Página, Número do Extrato, Texto e Metadados.
 - **Indexação de Alta Performance**: Utiliza SQLite FTS5 para buscas textuais em milissegundos.
 - **Leitura em ordem de colunas real**: PDFs em layout de 2 colunas são indexados na ordem de leitura correta (coluna esquerda inteira, depois a direita), evitando cortar parágrafos/extratos que atravessam a quebra de coluna (`analyzer/layout.py`).
+- **Detecção de novo parágrafo/extrato linha por linha**: evita fundir dois extratos/parágrafos em um só quando o PDF agrupa, no mesmo bloco de texto, o fim de um e o início do próximo (comum quando há pouco espaço vertical entre eles).
 - **Busca Aproximada (Fuzzy)**: Integração com RapidFuzz para tolerar erros de OCR e diferenças de acentuação.
 - **Interface renovada**: cabeçalho com identidade visual, modo claro/escuro, fonte maior e mais legível no painel de resultado.
 - **Atualização automática**: ao abrir, o app verifica se há uma versão mais nova publicada no GitHub e se oferece para se auto-atualizar (`app/updater.py`).
