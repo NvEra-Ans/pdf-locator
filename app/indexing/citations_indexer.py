@@ -18,6 +18,9 @@ class CitationsIndexer(BaseIndexer):
 
             active_entry_id = None
             active_entry_text = []
+            active_entry_title = None
+            active_entry_location = None
+            active_entry_date = None
             printed_label = "1"
 
             for page_idx in range(len(doc)):
@@ -71,14 +74,33 @@ class CitationsIndexer(BaseIndexer):
                         if active_entry_id is None:
                             active_entry_id = self._start_entry(cursor, doc_id, "Intro/Capa")
                             active_entry_text = []
+                            active_entry_title = None
+                            active_entry_location = None
+                            active_entry_date = None
 
                         # Linha inicia uma nova entrada numerada -> fecha a anterior e abre esta
                         if res["is_paragraph_candidate"]:
-                            self._close_entry(cursor, active_entry_id, doc_id, printed_label, active_entry_text)
+                            self._close_entry(
+                                cursor, active_entry_id, doc_id, printed_label,
+                                active_entry_text, active_entry_title, active_entry_location, active_entry_date
+                            )
                             active_entry_id = self._start_entry(cursor, doc_id, res["detected_paragraph_num"])
-                            active_entry_text = []
+                            active_entry_text = [line_text]
+                            active_entry_title = None
+                            active_entry_location = None
+                            active_entry_date = None
 
-                        active_entry_text.append(line_text)
+                        # Linha "Cidade, Estado., DD-MM-AA" -> fecha a citação/atribuição
+                        # do extrato atual. A linha anterior (já no corpo do texto) é o
+                        # título em negrito da referência ("Mire hacia Jesús, Pág. X...");
+                        # as duas saem do corpo e viram source_title/location/date_str.
+                        elif res["is_location_date_candidate"] and active_entry_text:
+                            active_entry_title = active_entry_text.pop()
+                            active_entry_location = res["detected_location"]
+                            active_entry_date = res["detected_date"]
+
+                        else:
+                            active_entry_text.append(line_text)
 
                         cursor.execute(
                             "INSERT INTO entry_chunks (entry_id, page_id, chunk_text, bbox) VALUES (?, ?, ?, ?)",
@@ -87,7 +109,10 @@ class CitationsIndexer(BaseIndexer):
 
             # Fecha a última entrada pendente ao final do documento
             if active_entry_id is not None:
-                self._close_entry(cursor, active_entry_id, doc_id, printed_label, active_entry_text)
+                self._close_entry(
+                    cursor, active_entry_id, doc_id, printed_label,
+                    active_entry_text, active_entry_title, active_entry_location, active_entry_date
+                )
 
             conn.commit()
         return True
@@ -100,14 +125,21 @@ class CitationsIndexer(BaseIndexer):
         )
         return cursor.lastrowid
 
-    def _close_entry(self, cursor, entry_id: int, doc_id: int, printed_label: str, text_parts) -> None:
-        """Consolida o texto acumulado da entrada (todos os blocos/chunks) e grava em text_entries + fts_entries."""
+    def _close_entry(
+        self, cursor, entry_id: int, doc_id: int, printed_label: str, text_parts,
+        source_title=None, location=None, date_str=None
+    ) -> None:
+        """Consolida o texto acumulado da entrada (todos os blocos/chunks) e grava em
+        text_entries + fts_entries. full_text/normalized_text contêm só o corpo da
+        citação (sem a linha de atribuição) — título/local/data ficam em colunas
+        separadas, para a UI poder mostrar formatado como no livro."""
         full_text = " ".join(text_parts).strip()
         norm_text = self.normalize_text(full_text)
 
         cursor.execute(
-            "UPDATE text_entries SET full_text = ?, normalized_text = ? WHERE id = ?",
-            (full_text, norm_text, entry_id)
+            "UPDATE text_entries SET full_text = ?, normalized_text = ?, "
+            "source_title = ?, location = ?, date_str = ? WHERE id = ?",
+            (full_text, norm_text, source_title, location, date_str, entry_id)
         )
 
         cursor.execute("SELECT entry_number FROM text_entries WHERE id = ?", (entry_id,))
@@ -116,5 +148,5 @@ class CitationsIndexer(BaseIndexer):
         cursor.execute(
             "INSERT INTO fts_entries (entry_id, document_id, printed_page_label, entry_number, content, source_title, location) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (entry_id, doc_id, printed_label, entry_number, norm_text, None, None)
+            (entry_id, doc_id, printed_label, entry_number, norm_text, source_title, location)
         )

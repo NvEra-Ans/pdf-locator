@@ -351,12 +351,33 @@ class MainWindow(QMainWindow):
         num_kind = "Parágrafo" if res.paragraph_number else "Extrato"
 
         safe_text = html.escape(res.full_text).replace("\n", "<br>")
-        self.txt_detail.setHtml(
+        html_parts = [
             f'<span style="background-color:#F3E7C3; color:#6B5514; border-radius:10px; '
             f'padding:2px 8px; font-weight:600; font-size:12px;">'
-            f'{num_kind} {html.escape(str(num_label))} · Página {html.escape(res.printed_page_label)}</span>'
-            f'<p style="font-size:16px; line-height:160%; margin-top:12px;">{safe_text}</p>'
-        )
+            f'{num_kind} {html.escape(str(num_label))} · Página {html.escape(res.printed_page_label)}</span>',
+            f'<p style="font-size:16px; line-height:160%; margin-top:12px;">{safe_text}</p>',
+        ]
+
+        # Referência da citação (título em negrito + local/data), do mesmo jeito
+        # que aparece no livro ao final de cada extrato — só existe para o
+        # perfil Tipo B (Livro de Citações), quando o indexador conseguiu
+        # reconhecer essas duas linhas separadas do corpo do texto.
+        if res.source_title or res.location or res.date_str:
+            title_color, meta_color, border_color = (
+                ("#F2E7C6", "#B9BEC7", "rgba(255,255,255,0.15)") if self.theme.is_dark()
+                else ("#6B5514", "#5B6270", "rgba(0,0,0,0.12)")
+            )
+            loc_date = ", ".join(x for x in [res.location, res.date_str] if x)
+            html_parts.append(
+                f'<div style="margin-top:14px; padding-top:10px; border-top:1px solid {border_color}; '
+                f'text-align:center;">'
+                + (f'<div style="font-weight:700; font-size:14px; color:{title_color};">'
+                   f'{html.escape(res.source_title or "")}</div>' if res.source_title else "")
+                + (f'<div style="font-size:13px; color:{meta_color};">{html.escape(loc_date)}</div>' if loc_date else "")
+                + '</div>'
+            )
+
+        self.txt_detail.setHtml("".join(html_parts))
 
     # --------------------------------------------------------------- Ações
 

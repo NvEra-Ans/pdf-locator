@@ -2,7 +2,7 @@
 
 Aplicativo Desktop local para Windows capaz de indexar e realizar pesquisas estruturadas em coleções de documentos e livros PDF.
 
-Versão atual: **2.1.2** (ver `app/version.py`)
+Versão atual: **2.2.0** (ver `app/version.py`)
 
 ## Funcionalidades
 - **Arquitetura por Perfis de Documentos (`DocumentIndexProfile`)**:

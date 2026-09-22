@@ -7,6 +7,12 @@ class PatternDetector:
     PAGE_NUMBER_PATTERN = re.compile(r'^\s*(?:pág|pág\.|página|page)?\s*(\d+[A-Za-z]?)\s*$', re.IGNORECASE)
     PARAGRAPH_PATTERN = re.compile(r'^\s*(\d{1,4})\s*[\-\–\—\.]?\s*')
 
+    # Linha de local/data que fecha cada extrato nos livros de citações, ex.:
+    # "Jeffersonville, Ind., 12-29-63". Tudo antes da última vírgula é o
+    # local (pode ter vírgulas internas, ex. "Jeffersonville, Ind."), e o que
+    # vem depois é a data no formato M(M)-D(D)-AA(AA).
+    LOCATION_DATE_PATTERN = re.compile(r'^\s*(?P<location>.+?),\s*(?P<date>\d{1,2}-\d{1,2}-\d{2,4})\s*$')
+
     @classmethod
     def analyze_text_span(cls, text: str, bbox: List[float], page_width: float, page_height: float) -> Dict[str, Any]:
         result = {
@@ -14,7 +20,10 @@ class PatternDetector:
             "confidence_page_label": 0.0,
             "detected_label": "",
             "is_paragraph_candidate": False,
-            "detected_paragraph_num": ""
+            "detected_paragraph_num": "",
+            "is_location_date_candidate": False,
+            "detected_location": "",
+            "detected_date": ""
         }
 
         if not text:
@@ -41,5 +50,15 @@ class PatternDetector:
         if para_match:
             result["is_paragraph_candidate"] = True
             result["detected_paragraph_num"] = para_match.group(1)
+
+        # Check for a "Cidade, Estado., DD-MM-AA" attribution line (fecha um
+        # extrato). Uma linha que já foi reconhecida como início de novo
+        # parágrafo/extrato não pode ser também uma linha de atribuição.
+        if not result["is_paragraph_candidate"]:
+            loc_match = cls.LOCATION_DATE_PATTERN.match(clean_text)
+            if loc_match:
+                result["is_location_date_candidate"] = True
+                result["detected_location"] = loc_match.group("location").strip()
+                result["detected_date"] = loc_match.group("date").strip()
 
         return result
