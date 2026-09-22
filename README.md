@@ -2,7 +2,7 @@
 
 Aplicativo Desktop local para Windows capaz de indexar e realizar pesquisas estruturadas em coleções de documentos e livros PDF.
 
-Versão atual: **2.0.0** (ver `app/version.py`)
+Versão atual: **2.1.0** (ver `app/version.py`)
 
 ## Funcionalidades
 - **Arquitetura por Perfis de Documentos (`DocumentIndexProfile`)**:
@@ -34,11 +34,11 @@ build_windows.bat
 ```
 Isso gera dois artefatos:
 - `dist/Localizador/Localizador.exe` — a pasta do app "solta" (o que o auto-update usa por baixo dos panos).
-- `dist_installer/LocalizadorSetup.exe` — **o instalador único** para distribuir a outros PCs. É esse arquivo que você entrega para outras pessoas instalarem: clicam duas vezes, o app instala em `%LOCALAPPDATA%\Programs\Localizador` (não precisa ser administrador), cria atalho na Área de Trabalho e no Menu Iniciar, e fica com desinstalador próprio no Windows.
+- `dist_installer/LocalizadorSetup.exe` — **o instalador único** para distribuir a outros PCs. É esse arquivo que você entrega: clica duas vezes, pede permissão de administrador (uma vez, na instalação), instala em `Arquivos de Programas`, cria atalho na Área de Trabalho e no Menu Iniciar **para qualquer login do Windows nesse PC**, e fica com desinstalador próprio no Windows.
 
 Se o Inno Setup não estiver no PATH, o script só gera a pasta e avisa — instale o Inno Setup e rode `build_windows.bat` de novo, ou compile `installer.iss` manualmente abrindo-o no Inno Setup Compiler.
 
-> Instalar em `%LOCALAPPDATA%` (por usuário) em vez de `Arquivos de Programas` é proposital: assim o auto-update (`app/updater.py`) consegue substituir os arquivos sozinho, sem pedir permissão de administrador a cada atualização.
+> **Trade-off consciente**: instalar em `Arquivos de Programas` (por máquina, todos os logins) em vez de `%LOCALAPPDATA%` (por usuário) foi escolhido porque o app deve estar disponível pra qualquer pessoa que logar no PC. O preço disso: o auto-update (`app/updater.py`) não consegue mais gravar ali silenciosamente — ele pede elevação (prompt de UAC do Windows) na hora de aplicar a atualização. Se quem estiver logado no momento não for administrador da máquina, o prompt aparece e não pode ser confirmado; a atualização simplesmente fica pendente e é oferecida de novo na próxima abertura do app, sem travar nada.
 
 ## Publicando uma nova versão (auto-update para quem já tem o app instalado)
 

@@ -7,9 +7,11 @@
 ;      comando: "ISCC.exe installer.iss")
 ;   3. O instalador final fica em dist_installer\LocalizadorSetup.exe
 ;
-; Instala em %LOCALAPPDATA% (por usuário, SEM precisar de admin) de propósito:
-; assim o auto-update do app (app/updater.py) consegue substituir os arquivos
-; sozinho, sem pedir permissão de administrador toda vez.
+; Instalação POR MÁQUINA (Arquivos de Programas), visível para qualquer
+; login do Windows nesse PC — exige ser executado como administrador (o
+; instalador pede elevação sozinho). Como consequência, o auto-update
+; (app/updater.py) também precisa de elevação para substituir os arquivos;
+; veja a observação em app/updater.py sobre esse trade-off.
 
 #define MyAppName "Localizador de Citações"
 ; MyAppVersion normalmente é passada pela linha de comando do build
@@ -27,10 +29,11 @@ AppId={{BC850132-2769-4E66-BBC8-8B810BCDC7FA}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={localappdata}\Programs\Localizador
+DefaultDirName={autopf}\Localizador
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
+PrivilegesRequiredOverridesAllowed=commandline
 OutputDir=dist_installer
 OutputBaseFilename=LocalizadorSetup
 SetupIconFile=app\assets\icon.ico
@@ -44,15 +47,17 @@ ArchitecturesInstallIn64BitMode=x64
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Criar ícone na Área de Trabalho"; GroupDescription: "Ícones adicionais:"
+Name: "desktopicon"; Description: "Criar ícone na Área de Trabalho (para todos os usuários)"; GroupDescription: "Ícones adicionais:"
 
 [Files]
 Source: "dist\Localizador\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
+; {group} com instalação por máquina já cria o atalho no Menu Iniciar comum
+; (visível a todos os logins). {commondesktop} faz o mesmo na Área de Trabalho.
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Abrir {#MyAppName}"; Flags: nowait postinstall skipifsilent

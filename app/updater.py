@@ -14,6 +14,19 @@ Como funciona
    substitui os arquivos da instalação atual pelos novos, apaga a pasta
    temporária e reabre o aplicativo. O app então se fecha e o `.bat` assume.
 
+Elevação (UAC)
+--------------
+A partir da v2.1.0 o instalador (`installer.iss`) instala por máquina, em
+"Arquivos de Programas" (visível para qualquer login do Windows nesse PC) —
+o que exige direitos de administrador para gravar ali. Por isso o `.bat` de
+atualização é lançado com `runas` (pede elevação/UAC), não silenciosamente.
+
+Consequência real: se a pessoa logada não for administradora da máquina (ou
+não souber a senha de um admin), o prompt do UAC aparece e ela não consegue
+confirmar — a atualização fica pendente e será oferecida de novo na próxima
+abertura do app, sem travar nem quebrar nada, só não se aplica sozinha até
+alguém com direitos de admin aceitar o prompt.
+
 Isso só faz sentido rodando como executável empacotado pelo PyInstaller
 (`build_windows.bat`, modo --onedir) — cada novo `git push` de uma tag `vX.Y.Z`
 deve disparar o workflow do GitHub Actions (`.github/workflows/release.yml`)
@@ -25,7 +38,6 @@ import sys
 import json
 import zipfile
 import tempfile
-import subprocess
 import urllib.request
 import urllib.error
 from typing import Optional, Tuple
@@ -165,11 +177,27 @@ start "" "%DEST%\\{exe_name}"
 rmdir /S /Q "{tmp_dir}"
 """)
 
-        subprocess.Popen(
-            ["cmd.exe", "/c", bat_path],
-            creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS,
-            close_fds=True,
+        return _launch_elevated(bat_path)
+    except Exception:
+        return False
+
+
+def _launch_elevated(bat_path: str) -> bool:
+    """Lança o .bat de atualização pedindo elevação (UAC), necessária porque
+    a instalação por máquina fica em "Arquivos de Programas". Usa
+    ShellExecuteW com o verbo "runas" (equivalente a clicar em "Executar
+    como administrador"). Devolve True se o pedido de elevação foi disparado
+    com sucesso — não garante que o usuário vai aceitar o prompt do UAC; se
+    recusar, os arquivos simplesmente não são substituídos e o app oferece a
+    atualização de novo na próxima abertura."""
+    try:
+        import ctypes
+        SW_SHOWNORMAL = 1
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", "cmd.exe", f'/c "{bat_path}"', None, SW_SHOWNORMAL
         )
-        return True
+        # ShellExecuteW devolve um valor > 32 em caso de sucesso ao disparar
+        # o processo; <= 32 indica falha (ex.: usuário cancelou o UAC).
+        return int(result) > 32
     except Exception:
         return False
