@@ -29,7 +29,7 @@ echo Versao detectada: %APP_VERSION%
 
 where ISCC.exe >nul 2>nul
 if errorlevel 1 (
-    echo AVISO: Inno Setup (ISCC.exe) nao encontrado no PATH.
+    echo AVISO: Inno Setup ^(ISCC.exe^) nao encontrado no PATH.
     echo Instale em https://jrsoftware.org/isdl.php e rode este script de novo,
     echo ou compile installer.iss manualmente pelo Inno Setup Compiler.
     echo O executavel da pasta ja foi gerado em dist\Localizador\Localizador.exe

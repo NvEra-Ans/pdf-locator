@@ -1,6 +1,7 @@
 import sys
 import os
 import html
+import hashlib
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QComboBox, QTextEdit,
@@ -280,22 +281,59 @@ class MainWindow(QMainWindow):
 
         prof_type = ProfileType.PARAGRAPH_BOOK if item == items[0] else ProfileType.CITATIONS_BOOK
 
-        with self.db_conn.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO documents (filename, filepath, title, hash, profile_type) VALUES (?, ?, ?, ?, ?)",
-                (filename, file_path, filename, str(hash(file_path)), prof_type.value)
-            )
-            doc_id = cursor.lastrowid
-            conn.commit()
-
-        if prof_type == ProfileType.PARAGRAPH_BOOK:
-            indexer = ParagraphIndexer(self.db_conn)
-        else:
-            indexer = CitationsIndexer(self.db_conn)
-
         try:
+            # Hash do CONTEÚDO do arquivo (não do caminho) — assim o mesmo PDF
+            # sempre gera o mesmo hash entre execuções diferentes do app, e dá
+            # pra detectar de verdade "esse arquivo já foi importado antes".
+            file_hash = hashlib.sha256()
+            with open(file_path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    file_hash.update(chunk)
+            file_hash = file_hash.hexdigest()
+
+            with self.db_conn.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM documents WHERE hash = ?", (file_hash,))
+                existing = cursor.fetchone()
+
+                if existing:
+                    resp = QMessageBox.question(
+                        self, "Documento já importado",
+                        "Esse arquivo já tinha sido importado antes.\n\n"
+                        "Deseja reindexar (apagar a indexação antiga e refazer do zero, "
+                        "sem duplicar na lista)?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if resp != QMessageBox.Yes:
+                        return
+                    doc_id = existing["id"]
+                    # Apaga tudo que dependia desse documento. As tabelas normais têm
+                    # ON DELETE CASCADE, mas as tabelas virtuais FTS5 não suportam
+                    # chave estrangeira, então precisam ser limpas manualmente.
+                    cursor.execute("DELETE FROM fts_entries WHERE document_id = ?", (doc_id,))
+                    cursor.execute("DELETE FROM fts_paragraphs WHERE document_id = ?", (doc_id,))
+                    cursor.execute("DELETE FROM pages WHERE document_id = ?", (doc_id,))
+                    cursor.execute("DELETE FROM text_entries WHERE document_id = ?", (doc_id,))
+                    cursor.execute(
+                        "UPDATE documents SET filename = ?, filepath = ?, title = ?, profile_type = ? WHERE id = ?",
+                        (filename, file_path, filename, prof_type.value, doc_id)
+                    )
+                else:
+                    cursor.execute(
+                        "INSERT INTO documents (filename, filepath, title, hash, profile_type) VALUES (?, ?, ?, ?, ?)",
+                        (filename, file_path, filename, file_hash, prof_type.value)
+                    )
+                    doc_id = cursor.lastrowid
+
+                conn.commit()
+
+            if prof_type == ProfileType.PARAGRAPH_BOOK:
+                indexer = ParagraphIndexer(self.db_conn)
+            else:
+                indexer = CitationsIndexer(self.db_conn)
+
             indexer.index_document(doc_id, file_path)
+
         except Exception as exc:
             QMessageBox.critical(self, "Erro ao indexar", f"Falha ao indexar o documento:\n{exc}")
             return
