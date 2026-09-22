@@ -26,11 +26,19 @@ Versão atual: **2.0.0** (ver `app/version.py`)
    python app/main.py
    ```
 
-## Gerando o executável Windows
+## Gerando o executável Windows e o instalador único
+Pré-requisito único: [Inno Setup](https://jrsoftware.org/isdl.php) instalado (gratuito) — é o que gera o instalador de um arquivo só.
+
 ```
 build_windows.bat
 ```
-O executável fica em `dist/Localizador/Localizador.exe`.
+Isso gera dois artefatos:
+- `dist/Localizador/Localizador.exe` — a pasta do app "solta" (o que o auto-update usa por baixo dos panos).
+- `dist_installer/LocalizadorSetup.exe` — **o instalador único** para distribuir a outros PCs. É esse arquivo que você entrega para outras pessoas instalarem: clicam duas vezes, o app instala em `%LOCALAPPDATA%\Programs\Localizador` (não precisa ser administrador), cria atalho na Área de Trabalho e no Menu Iniciar, e fica com desinstalador próprio no Windows.
+
+Se o Inno Setup não estiver no PATH, o script só gera a pasta e avisa — instale o Inno Setup e rode `build_windows.bat` de novo, ou compile `installer.iss` manualmente abrindo-o no Inno Setup Compiler.
+
+> Instalar em `%LOCALAPPDATA%` (por usuário) em vez de `Arquivos de Programas` é proposital: assim o auto-update (`app/updater.py`) consegue substituir os arquivos sozinho, sem pedir permissão de administrador a cada atualização.
 
 ## Publicando uma nova versão (auto-update para quem já tem o app instalado)
 
@@ -46,7 +54,7 @@ O executável fica em `dist/Localizador/Localizador.exe`.
    git tag v2.1.0
    git push origin v2.1.0
    ```
-4. O workflow `.github/workflows/release.yml` builda o `.exe` automaticamente numa máquina Windows do GitHub Actions, compacta em `Localizador-Windows.zip` e publica um GitHub Release.
+4. O workflow `.github/workflows/release.yml` builda o `.exe` automaticamente numa máquina Windows do GitHub Actions, compacta em `Localizador-Windows.zip`, gera também `LocalizadorSetup.exe` (instalador único) e publica os dois num GitHub Release.
 5. Todo app já instalado que for aberto a partir de agora vai detectar essa versão nova (comparando com `app/version.py` local), perguntar ao usuário se quer atualizar e, se aceito, baixar e substituir os arquivos sozinho, reabrindo o app já atualizado.
 
 > Isso depende de `GITHUB_OWNER`/`GITHUB_REPO` em `app/version.py` apontarem para o repositório certo, e de o repositório ser público (ou o updater precisaria de autenticação, o que não está implementado nesta versão).
@@ -67,4 +75,5 @@ analyzer/
   pattern_detector.py   Detecção de números de página/parágrafo/extrato
   layout.py             Reordenação de blocos em ordem de leitura (colunas)
 .github/workflows/release.yml   Build + publicação automática do release
+installer.iss                   Script do Inno Setup (gera o instalador único)
 ```

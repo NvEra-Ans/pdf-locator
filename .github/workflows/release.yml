@@ -3,11 +3,12 @@ name: Build e Publicar Release (Windows)
 # Dispara sempre que uma tag de versao "vX.Y.Z" for enviada ao repositorio.
 # Fluxo de atualizacao:
 #   1. git tag v2.1.0 && git push origin v2.1.0
-#   2. Este workflow builda o .exe (PyInstaller) numa maquina Windows do GitHub
-#   3. Compacta dist/Localizador em Localizador-Windows.zip
-#   4. Publica um GitHub Release com esse .zip anexado
-#   5. Os apps ja instalados detectam a nova versao no proximo start
-#      (app/updater.py consulta a API de releases) e se atualizam sozinhos.
+#   2. Este workflow builda o .exe (PyInstaller) numa maquina Windows do GitHub,
+#      gera tambem o instalador unico (Inno Setup) e publica os dois no Release:
+#        - Localizador-Windows.zip   -> usado pelo auto-update (app/updater.py)
+#        - LocalizadorSetup.exe      -> instalador unico p/ instalar em PCs novos
+#   3. Os apps ja instalados detectam a nova versao no proximo start e se
+#      atualizam sozinhos baixando o .zip.
 
 on:
   push:
@@ -30,7 +31,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Instalar dependencias
+      - name: Instalar dependencias Python
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -48,12 +49,23 @@ jobs:
             --hidden-import "rapidfuzz" `
             app/main.py
 
-      - name: Compactar build
+      - name: Compactar build (usado pelo auto-update)
         run: |
           Compress-Archive -Path "dist/Localizador/*" -DestinationPath "Localizador-Windows.zip"
+
+      - name: Instalar Inno Setup
+        run: |
+          choco install innosetup -y --no-progress
+
+      - name: Gerar instalador unico (LocalizadorSetup.exe)
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$version installer.iss
 
       - name: Publicar GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: Localizador-Windows.zip
+          files: |
+            Localizador-Windows.zip
+            dist_installer/LocalizadorSetup.exe
           generate_release_notes: true
