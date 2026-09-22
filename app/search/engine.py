@@ -100,7 +100,7 @@ class SearchEngine:
                        e.entry_number, e.full_text, e.normalized_text, e.source_title, e.location, e.date_str
                 FROM text_entries e
                 JOIN documents d ON e.document_id = d.id
-                WHERE d.id = ?
+                WHERE d.id = ? AND e.needs_review = 0
                 """
                 params = [document_id]
 

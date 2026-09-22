@@ -117,6 +117,10 @@ class MainWindow(QMainWindow):
         self.btn_import = QPushButton("Importar PDF...")
         self.btn_import.clicked.connect(self._import_pdf)
         doc_box.addWidget(self.btn_import)
+
+        self.btn_delete_doc = QPushButton("Excluir Documento")
+        self.btn_delete_doc.clicked.connect(self._delete_document)
+        doc_box.addWidget(self.btn_delete_doc)
         return doc_box
 
     def _build_search_row(self):
@@ -125,18 +129,21 @@ class MainWindow(QMainWindow):
         self.lbl_page = QLabel("Página:")
         self.txt_page = QLineEdit()
         self.txt_page.setPlaceholderText("ex: 14A")
+        self.txt_page.returnPressed.connect(self._perform_search)
         search_box.addWidget(self.lbl_page)
         search_box.addWidget(self.txt_page)
 
         self.lbl_para = QLabel("Parágrafo:")
         self.txt_para = QLineEdit()
         self.txt_para.setPlaceholderText("ex: 140")
+        self.txt_para.returnPressed.connect(self._perform_search)
         search_box.addWidget(self.lbl_para)
         search_box.addWidget(self.txt_para)
 
         self.lbl_entry = QLabel("Extrato:")
         self.txt_entry = QLineEdit()
         self.txt_entry.setPlaceholderText("ex: 1057")
+        self.txt_entry.returnPressed.connect(self._perform_search)
         search_box.addWidget(self.lbl_entry)
         search_box.addWidget(self.txt_entry)
 
@@ -340,6 +347,46 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(self, "Sucesso", "Documento indexado com sucesso!")
         self._load_documents()
+
+    def _delete_document(self):
+        idx = self.combo_docs.currentIndex()
+        if idx < 0:
+            QMessageBox.information(self, "Excluir Documento", "Nenhum documento selecionado.")
+            return
+
+        doc_title = self.combo_docs.currentText()
+        doc_id = self.combo_docs.itemData(idx)["id"]
+
+        resp = QMessageBox.question(
+            self, "Excluir Documento",
+            f"Tem certeza que deseja excluir a indexação de:\n\n\"{doc_title}\"\n\n"
+            "Isso remove todas as páginas, parágrafos/extratos e o índice de busca "
+            "desse documento (o arquivo PDF original no seu computador não é afetado). "
+            "Essa ação não pode ser desfeita.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if resp != QMessageBox.Yes:
+            return
+
+        try:
+            with self.db_conn.get_connection() as conn:
+                cursor = conn.cursor()
+                # As tabelas normais têm ON DELETE CASCADE (pages, text_entries,
+                # paragraphs, entry_chunks), mas as tabelas virtuais FTS5 não
+                # suportam chave estrangeira e precisam ser limpas manualmente.
+                cursor.execute("DELETE FROM fts_entries WHERE document_id = ?", (doc_id,))
+                cursor.execute("DELETE FROM fts_paragraphs WHERE document_id = ?", (doc_id,))
+                cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+                conn.commit()
+        except Exception as exc:
+            QMessageBox.critical(self, "Erro ao excluir", f"Falha ao excluir o documento:\n{exc}")
+            return
+
+        self.table.setRowCount(0)
+        self.current_results = []
+        self.txt_detail.clear()
+        self._load_documents()
+        QMessageBox.information(self, "Excluído", "Documento removido com sucesso.")
 
     # ---------------------------------------------------------------- Busca
 

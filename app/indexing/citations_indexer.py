@@ -136,14 +136,31 @@ class CitationsIndexer(BaseIndexer):
         full_text = " ".join(text_parts).strip()
         norm_text = self.normalize_text(full_text)
 
-        cursor.execute(
-            "UPDATE text_entries SET full_text = ?, normalized_text = ?, "
-            "source_title = ?, location = ?, date_str = ? WHERE id = ?",
-            (full_text, norm_text, source_title, location, date_str, entry_id)
-        )
-
         cursor.execute("SELECT entry_number FROM text_entries WHERE id = ?", (entry_id,))
         entry_number = cursor.fetchone()[0]
+
+        # "Extrato fantasma": a única linha que abriu essa entrada era só o
+        # próprio número (ex.: "1057", ou "1057 -"), sem nenhum texto de
+        # citação depois. Isso acontece tipicamente em páginas de índice/
+        # sumário do livro, onde o número aparece sozinho como referência
+        # cruzada — não é uma citação de verdade. Só filtra o caso 100% vazio
+        # (zero risco de esconder uma citação real que só coincide em ser
+        # curta); entradas com QUALQUER texto além do número continuam
+        # indexadas normalmente, mesmo que pareçam curtas.
+        body_after_number = PatternDetector.PARAGRAPH_PATTERN.sub("", full_text, count=1).strip()
+        is_empty_shell = (body_after_number == "")
+
+        cursor.execute(
+            "UPDATE text_entries SET full_text = ?, normalized_text = ?, "
+            "source_title = ?, location = ?, date_str = ?, needs_review = ? WHERE id = ?",
+            (full_text, norm_text, source_title, location, date_str, 1 if is_empty_shell else 0, entry_id)
+        )
+
+        if is_empty_shell:
+            # Mantém a linha em text_entries (dado bruto, útil pra depurar),
+            # mas não entra no índice de busca — não deve aparecer como
+            # resultado de pesquisa.
+            return
 
         cursor.execute(
             "INSERT INTO fts_entries (entry_id, document_id, printed_page_label, entry_number, content, source_title, location) "
