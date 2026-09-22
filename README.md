@@ -73,6 +73,7 @@ app/
   search/        Motor de busca (FTS5 + fuzzy)
   ui/            Interface (janela principal, temas claro/escuro)
   main.py        Ponto de entrada
+  paths.py       Decide onde fica o banco de dados (ver nota abaixo)
   updater.py     Verificação e aplicação de atualizações via GitHub Releases
   version.py     Nome e versão do app
 analyzer/
@@ -81,3 +82,5 @@ analyzer/
 .github/workflows/release.yml   Build + publicação automática do release
 installer.iss                   Script do Inno Setup (gera o instalador único)
 ```
+
+> **Onde fica o banco de dados**: rodando via `python app/main.py` (desenvolvimento), fica em `data/locator.db` dentro do projeto, como sempre foi. Rodando a partir do `.exe` instalado (empacotado pelo PyInstaller), fica em `%LOCALAPPDATA%\Localizador\data\locator.db` — fora da pasta de instalação, porque "Arquivos de Programas" não é gravável por usuários comuns (ver `app/paths.py`).
