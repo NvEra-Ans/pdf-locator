@@ -27,11 +27,15 @@ Versão atual: **2.1.0** (ver `app/version.py`)
    ```
 
 ## Gerando o executável Windows e o instalador único
-Pré-requisito único: [Inno Setup](https://jrsoftware.org/isdl.php) instalado (gratuito) — é o que gera o instalador de um arquivo só.
+Pré-requisitos:
+- `pip install -r requirements.txt` e `pip install pyinstaller` já rodados.
+- [Inno Setup](https://jrsoftware.org/isdl.php) instalado (gratuito) — é o que gera o instalador de um arquivo só.
 
 ```
 build_windows.bat
 ```
+
+> Se aparecer `'pyinstaller' não é reconhecido...`, é PATH do Windows (comum quando o Python foi instalado sem a opção de adicionar tudo ao PATH). O script já roda com `python -m PyInstaller` em vez de `pyinstaller` sozinho justamente para evitar isso — mas se ainda assim der esse erro, confirme que `python --version` funciona no seu terminal antes de mais nada.
 Isso gera dois artefatos:
 - `dist/Localizador/Localizador.exe` — a pasta do app "solta" (o que o auto-update usa por baixo dos panos).
 - `dist_installer/LocalizadorSetup.exe` — **o instalador único** para distribuir a outros PCs. É esse arquivo que você entrega: clica duas vezes, pede permissão de administrador (uma vez, na instalação), instala em `Arquivos de Programas`, cria atalho na Área de Trabalho e no Menu Iniciar **para qualquer login do Windows nesse PC**, e fica com desinstalador próprio no Windows.

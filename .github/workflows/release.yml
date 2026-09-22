@@ -39,7 +39,7 @@ jobs:
 
       - name: Build do executavel (PyInstaller)
         run: |
-          pyinstaller --noconfirm --onedir --windowed `
+          python -m PyInstaller --noconfirm --onedir --windowed `
             --name "Localizador" `
             --icon "app/assets/icon.ico" `
             --add-data "data;data" `

@@ -3,7 +3,7 @@ echo ===================================================
 echo 1/2 - Gerando Executavel Windows (Localizador.exe)
 echo ===================================================
 
-pyinstaller --noconfirm --onedir --windowed ^
+python -m PyInstaller --noconfirm --onedir --windowed ^
     --name "Localizador" ^
     --icon "app/assets/icon.ico" ^
     --add-data "data;data" ^
