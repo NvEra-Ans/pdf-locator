@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QMessageBox, QHeaderView, QSplitter, QInputDialog,
     QApplication
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QObject, QThread, Signal
 from PySide6.QtGui import QIcon, QPixmap, QFont
 
 from app.database.connection import DatabaseConnection
@@ -21,6 +21,28 @@ from app.ui.theme import ThemeManager
 from app.paths import get_db_path
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
+
+
+class _SearchWorker(QObject):
+    """Roda SearchEngine.search() numa QThread separada, para que uma busca
+    lenta (ex.: fuzzy sobre um documento grande) nunca trave a janela do
+    aplicativo inteira — a UI continua respondendo enquanto o resultado
+    não chega."""
+
+    finished = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, search_engine: SearchEngine, kwargs: dict):
+        super().__init__()
+        self.search_engine = search_engine
+        self.kwargs = kwargs
+
+    def run(self):
+        try:
+            results = self.search_engine.search(**self.kwargs)
+            self.finished.emit(results)
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class MainWindow(QMainWindow):
@@ -402,14 +424,33 @@ class MainWindow(QMainWindow):
         text = self.txt_text.text().strip() or None
         fuzzy = self.chk_fuzzy.isChecked()
 
-        self.current_results = self.search_engine.search(
+        # A busca roda numa thread separada — uma pesquisa fuzzy sobre um
+        # documento grande pode levar vários segundos, e isso não pode
+        # travar a janela inteira do aplicativo enquanto processa.
+        self.btn_search.setEnabled(False)
+        self.btn_search.setText("Pesquisando...")
+        self.lbl_detail_header.setText("Pesquisando...")
+
+        self._search_thread = QThread()
+        self._search_worker = _SearchWorker(self.search_engine, dict(
             document_id=doc_id,
             page_label=page,
             paragraph_num=para,
             entry_num=entry,
             text_query=text,
             use_fuzzy=fuzzy
-        )
+        ))
+        self._search_worker.moveToThread(self._search_thread)
+        self._search_thread.started.connect(self._search_worker.run)
+        self._search_worker.finished.connect(self._on_search_finished)
+        self._search_worker.failed.connect(self._on_search_failed)
+        self._search_worker.finished.connect(self._search_thread.quit)
+        self._search_worker.failed.connect(self._search_thread.quit)
+        self._search_thread.finished.connect(self._search_thread.deleteLater)
+        self._search_thread.start()
+
+    def _on_search_finished(self, results):
+        self.current_results = results
 
         self.table.setRowCount(0)
         for r in self.current_results:
@@ -426,6 +467,15 @@ class MainWindow(QMainWindow):
             self.lbl_detail_header.setText("Nenhum resultado encontrado")
         else:
             self.lbl_detail_header.setText(f"{len(self.current_results)} resultado(s) encontrado(s)")
+
+        self.btn_search.setEnabled(True)
+        self.btn_search.setText("Pesquisar")
+
+    def _on_search_failed(self, error_msg):
+        self.btn_search.setEnabled(True)
+        self.btn_search.setText("Pesquisar")
+        self.lbl_detail_header.setText("Erro na pesquisa")
+        QMessageBox.critical(self, "Erro na pesquisa", f"Falha ao pesquisar:\n{error_msg}")
 
     def _on_result_selected(self):
         row = self.table.currentRow()

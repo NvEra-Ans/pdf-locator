@@ -23,6 +23,15 @@ class CitationsIndexer(BaseIndexer):
             active_entry_date = None
             printed_label = "1"
 
+            # Alguns livros de citações têm, além do corpo principal (numerado
+            # 1..N), seções extras ("Parte A", "Parte B") que REAPROVEITAM os
+            # mesmos números de extrato de novo. O livro sinaliza a virada de
+            # seção com um marcador de página tipo "7-A"/"1-B" no cabeçalho/
+            # rodapé. Rastreamos isso para poder distinguir "extrato 7 da
+            # Parte A" de "extrato 7" do corpo principal — sem isso, os dois
+            # caem no mesmo número e a busca fica imprecisa.
+            current_part = None
+
             for page_idx in range(len(doc)):
                 page = doc[page_idx]
                 width, height = page.rect.width, page.rect.height
@@ -33,14 +42,19 @@ class CitationsIndexer(BaseIndexer):
                 page_conf = 0.90
 
                 # 1. Tenta identificar o rótulo de página impresso no cabeçalho/rodapé
+                # (número de página simples, ou marcador de Parte A/B).
                 for b in raw_blocks:
                     if b.get("type") == 0:
                         for line in b.get("lines", []):
                             line_text = "".join([s.get("text", "") for s in line.get("spans", [])]).strip()
                             res = PatternDetector.analyze_text_span(line_text, b.get("bbox", [0, 0, 0, 0]), width, height)
-                            if res["is_page_number_candidate"] and res["confidence_page_label"] > page_conf:
-                                printed_label = res["detected_label"]
-                                page_conf = res["confidence_page_label"]
+                            if res["confidence_page_label"] > page_conf:
+                                if res["is_part_label_candidate"]:
+                                    printed_label = f"{res['detected_label']}-{res['detected_part']}"
+                                    page_conf = res["confidence_page_label"]
+                                elif res["is_page_number_candidate"]:
+                                    printed_label = res["detected_label"]
+                                    page_conf = res["confidence_page_label"]
 
                 cursor.execute(
                     "INSERT INTO pages (document_id, pdf_page_index, printed_page_label, confidence) VALUES (?, ?, ?, ?)",
@@ -70,6 +84,19 @@ class CitationsIndexer(BaseIndexer):
 
                         res = PatternDetector.analyze_text_span(line_text, bbox, width, height)
 
+                        # Marcador "Parte A"/"Parte B" (ex.: "7-A" sozinho no
+                        # cabeçalho/rodapé): só atualiza em qual seção estamos
+                        # agora — não é conteúdo de citação nenhuma, não abre
+                        # nem fecha extrato, não vira chunk.
+                        if res["is_part_label_candidate"]:
+                            current_part = res["detected_part"]
+                            continue
+
+                        # Número de página solto no cabeçalho/rodapé (ex.: só
+                        # "100"): idem, é só paginação, não é conteúdo.
+                        if res["is_page_number_candidate"]:
+                            continue
+
                         # Ainda não há entrada ativa: abre uma entrada de introdução/capa
                         if active_entry_id is None:
                             active_entry_id = self._start_entry(cursor, doc_id, "Intro/Capa")
@@ -84,7 +111,13 @@ class CitationsIndexer(BaseIndexer):
                                 cursor, active_entry_id, doc_id, printed_label,
                                 active_entry_text, active_entry_title, active_entry_location, active_entry_date
                             )
-                            active_entry_id = self._start_entry(cursor, doc_id, res["detected_paragraph_num"])
+                            entry_num = res["detected_paragraph_num"]
+                            if current_part:
+                                # Mesmo número reaproveitado na Parte A/B do livro
+                                # (ex.: extrato "7" do corpo principal vs. "7-A" da
+                                # Parte A) — sem isso os dois colidem na busca.
+                                entry_num = f"{entry_num}-{current_part}"
+                            active_entry_id = self._start_entry(cursor, doc_id, entry_num)
                             active_entry_text = [line_text]
                             active_entry_title = None
                             active_entry_location = None
@@ -98,6 +131,12 @@ class CitationsIndexer(BaseIndexer):
                             active_entry_title = active_entry_text.pop()
                             active_entry_location = res["detected_location"]
                             active_entry_date = res["detected_date"]
+
+                        # Cabeçalho/rodapé repetido do livro (ex.: o título "CITAS
+                        # DEL MENSAJE DEL PROFETA" que aparece em toda página) não
+                        # é conteúdo de citação — não acumula no corpo do extrato.
+                        elif res["is_header_or_footer"]:
+                            pass
 
                         else:
                             active_entry_text.append(line_text)
