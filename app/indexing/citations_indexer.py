@@ -8,6 +8,23 @@ from analyzer.layout import order_blocks_reading_order
 class CitationsIndexer(BaseIndexer):
     """Indexador específico para livros de citações/extratos numerados (Perfil Tipo B)."""
 
+    # A partir desta página (índice 0 do PyMuPDF, ou seja, "página impressa
+    # 203" do visualizador = pdf_page_index 202) começa a seção de ÍNDICE
+    # TEMÁTICO do livro (não confundir com o número de página impresso do
+    # PDF, que pode divergir se o arquivo tiver capa/folha de rosto extra).
+    # Confirmado pelo usuário olhando o PDF real: página 202/256 (visualizador)
+    # ainda é conteúdo normal (extrato 87); página 203/256 já é o índice.
+    # [não verificado por mim de forma independente — baseado só na confirmação
+    # do usuário sobre ESTE arquivo específico.]
+    #
+    # LIMITAÇÃO CONHECIDA: esse corte é por número de página fixo, não por
+    # detecção estrutural do cabeçalho "ÍNDICE". Se o PDF for reexportado com
+    # uma página a mais ou a menos antes dessa seção, esse número desloca e o
+    # corte passa a errar silenciosamente (sem lançar erro nenhum — só volta a
+    # indexar lixo, ou começa a cortar conteúdo válido antes da hora). Se isso
+    # acontecer, o valor abaixo precisa ser reconferido contra o PDF atual.
+    INDEX_SECTION_START_PDF_PAGE_IDX = 202
+
     def __init__(self, db_conn: DatabaseConnection):
         self.db_conn = db_conn
 
@@ -61,6 +78,16 @@ class CitationsIndexer(BaseIndexer):
                     (doc_id, page_idx, printed_label, page_conf)
                 )
                 page_db_id = cursor.lastrowid
+
+                # A partir da seção de ÍNDICE TEMÁTICO, os números baixos
+                # (1, 2, 3...) voltam a aparecer, agora como identificadores de
+                # tópico, não de extrato — sem esse corte, cada linha numerada
+                # do índice vira um "extrato fantasma" novo. Página inteira é
+                # pulada (não vira entry_chunks nem abre/fecha extrato), mas o
+                # registro em `pages` acima já foi feito, pra manter a
+                # numeração de página consistente pro resto do app.
+                if page_idx >= self.INDEX_SECTION_START_PDF_PAGE_IDX:
+                    continue
 
                 # 2. Reordena os blocos em ordem de leitura real (coluna esquerda
                 # inteira, depois coluna direita inteira) — é isso que evita cortar
