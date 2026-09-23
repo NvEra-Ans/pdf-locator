@@ -174,8 +174,20 @@ class CitationsIndexer(BaseIndexer):
                         # Cabeçalho/rodapé repetido do livro (ex.: o título "CITAS
                         # DEL MENSAJE DEL PROFETA" que aparece em toda página) não
                         # é conteúdo de citação — não acumula no corpo do extrato.
+                        #
+                        # BUG real encontrado com dado do usuario: esse "pass" nao
+                        # impedia o INSERT INTO entry_chunks logo abaixo (ele ficava
+                        # FORA do if/elif, rodando sempre). Isso gravava a linha de
+                        # cabecalho como se fosse um chunk do extrato ainda ATIVO
+                        # (ex.: "CITAS DEL MENSAJE DEL PROFETA" ficava associado ao
+                        # extrato 1539, na pagina "1-A", so porque era a pagina onde
+                        # o cabecalho apareceu) -- isso fazia esse extrato aparecer
+                        # errado em buscas por pagina ("1-A"), mesmo o texto dele
+                        # sendo, de verdade, da pagina 171. Corrigido com "continue",
+                        # igual ja acontece com marcador de pagina/Parte-A-B logo
+                        # acima -- cabecalho/rodape nao deve virar chunk nenhum.
                         elif res["is_header_or_footer"]:
-                            pass
+                            continue
 
                         else:
                             active_entry_text.append(line_text)
