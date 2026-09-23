@@ -52,6 +52,15 @@ class PatternDetector:
     # separadamente acima).
     PARAGRAPH_PATTERN = re.compile(r'^\s*(\d{1,4})\s*[\-\–\—\.]?\s*')
 
+    # Número grande formatado ao estilo espanhol/latino, com ponto separando
+    # milhares (ex.: "300.000", "1.234.567") — NAO pode ser confundido com
+    # início de extrato. Achado com dado real: o extrato 30 continuava na
+    # outra coluna com "300.000 de esos en esa reunión...", e "300.000" batia
+    # no PARAGRAPH_PATTERN como se fosse o extrato "300" começando ali,
+    # cortando o extrato 30 no meio da frase e criando um extrato fantasma
+    # "300". Verificado ANTES do PARAGRAPH_PATTERN.
+    THOUSANDS_NUMBER_PATTERN = re.compile(r'^\s*\d{1,3}(?:\.\d{3})+\b')
+
     # Referência estilo "capítulo:versículo" (ex.: "100:872"), usada em
     # citações bíblicas dentro do corpo do texto — não é o mesmo esquema de
     # numeração de extrato do livro (que nunca usa ":"), então não pode virar
@@ -109,8 +118,9 @@ class PatternDetector:
             return result
 
         # 3. Início de um extrato numerado (ex.: "44 - ..."), a menos que seja
-        # uma referência bíblica "capítulo:versículo".
-        if not cls.VERSE_REFERENCE_PATTERN.match(clean_text):
+        # uma referência bíblica "capítulo:versículo" ou um número grande
+        # formatado com ponto de milhar (ex.: "300.000").
+        if not cls.VERSE_REFERENCE_PATTERN.match(clean_text) and not cls.THOUSANDS_NUMBER_PATTERN.match(clean_text):
             para_match = cls.PARAGRAPH_PATTERN.match(clean_text)
             if para_match:
                 result["is_paragraph_candidate"] = True
