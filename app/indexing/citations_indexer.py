@@ -69,6 +69,18 @@ class CitationsIndexer(BaseIndexer):
                                 if res["is_part_label_candidate"]:
                                     printed_label = f"{res['detected_label']}-{res['detected_part']}"
                                     page_conf = res["confidence_page_label"]
+                                    # BUG real encontrado com dado do usuario: o marcador
+                                    # "1-B" fica no rodape da pagina, entao so seria visto
+                                    # pelo SEGUNDO laco (o que processa o corpo, em ordem de
+                                    # leitura) DEPOIS de ja ter processado o corpo inteiro
+                                    # dessa mesma pagina (rodape sempre vem por ultimo na
+                                    # ordem de leitura). Isso fazia a pagina inteira do
+                                    # marcador (ex.: extratos 1-11 da pagina "1-B") ser
+                                    # indexada ainda com o current_part da secao anterior.
+                                    # Atualizando aqui, neste primeiro laco que varre a
+                                    # pagina INTEIRA antes de processar o corpo, o
+                                    # current_part ja fica correto pra pagina inteira.
+                                    current_part = res["detected_part"]
                                 elif res["is_page_number_candidate"]:
                                     printed_label = res["detected_label"]
                                     page_conf = res["confidence_page_label"]
