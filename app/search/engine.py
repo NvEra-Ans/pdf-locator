@@ -111,8 +111,28 @@ class SearchEngine:
                     )"""
                     params.append(page_label)
                 if entry_num and profile.supports_entry_search:
-                    query += " AND e.entry_number = ?"
+                    # A busca por extrato precisa achar o numero "puro" (ex.:
+                    # "7") E as variantes de Parte A/B (ex.: "7-A", "7-B") --
+                    # o indexador grava entry_number com o sufixo "-A"/"-B"
+                    # quando o extrato pertence a uma dessas secoes (ver
+                    # citations_indexer.py). Antes da correcao do bug de
+                    # rastreamento de Parte A/B, esses extratos as vezes
+                    # ficavam gravados sem sufixo por engano, e por isso a
+                    # busca "= entry_num" parecia funcionar (coincidencia).
+                    # Com o rastreamento corrigido, o sufixo passou a ser
+                    # aplicado corretamente, e a busca por igualdade exata
+                    # parou de encontrar "7-A"/"7-B" ao buscar "7" -- por
+                    # pedido explicito do usuario, resultados do mesmo numero
+                    # de extrato em secoes diferentes devem aparecer juntos,
+                    # distinguidos pela coluna Pagina. LIKE 'entry_num-%'
+                    # cobre exatamente os sufixos "-A"/"-B" sem casar outros
+                    # numeros que só começam com os mesmos dígitos (ex.:
+                    # buscar "7" não deve casar "70-A", porque "70-A" não
+                    # começa com "7-").
+                    query += " AND (e.entry_number = ? OR e.entry_number LIKE ? ESCAPE '\\')"
+                    escaped_entry_num = entry_num.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
                     params.append(entry_num)
+                    params.append(f"{escaped_entry_num}-%")
 
                 cursor.execute(query, params)
                 rows = cursor.fetchall()
