@@ -109,6 +109,21 @@ class PatternDetector:
         r'\s*$'
     )
 
+    # Quarto formato confirmado, de uma revista citada como fonte: a linha
+    # de fechamento e so "<Mes por extenso> de <ano>" (ex.: "Febrero de
+    # 1956"), SEM virgula nenhuma e sem local -- por isso nao bate no
+    # LOCATION_DATE_PATTERN acima, que exige uma virgula separando local de
+    # data. CONFIRMADO com dado real: extrato 87 da Parte B ("Revista
+    # 'Heraldo de Fe'" / "Febrero de 1956") ficava com o titulo e a data
+    # colados no corpo do texto, em vez de aparecerem na caixa de
+    # referencia, porque nenhum padrao reconhecia essa linha como fechamento
+    # do extrato.
+    MONTH_YEAR_TEXT_PATTERN = re.compile(
+        r'^\s*(?P<date>(?:Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|'
+        r'Septiembre|Setiembre|Octubre|Noviembre|Diciembre)\s+de\s+\d{4})\s*$',
+        re.IGNORECASE
+    )
+
     @classmethod
     def analyze_text_span(cls, text: str, bbox: List[float], page_width: float, page_height: float) -> Dict[str, Any]:
         result = {
@@ -169,6 +184,15 @@ class PatternDetector:
             result["is_location_date_candidate"] = True
             result["detected_location"] = loc_match.group("location").strip()
             result["detected_date"] = loc_match.group("date").strip()
+            return result
+
+        # 4b. Linha "<Mês por extenso> de <ano>" (ex.: "Febrero de 1956"),
+        # sem local nenhum -- formato de revista citada como fonte.
+        month_match = cls.MONTH_YEAR_TEXT_PATTERN.match(clean_text)
+        if month_match:
+            result["is_location_date_candidate"] = True
+            result["detected_location"] = ""
+            result["detected_date"] = month_match.group("date").strip()
             return result
 
         # 5. Título de cabeçalho repetido do livro: reconhecido pelo texto
