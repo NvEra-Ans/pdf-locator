@@ -67,11 +67,25 @@ class PatternDetector:
     # um novo extrato.
     VERSE_REFERENCE_PATTERN = re.compile(r'^\s*\d{1,4}\s*:\s*\d')
 
-    # Linha de local/data que fecha cada extrato nos livros de citações, ex.:
-    # "Jeffersonville, Ind., 12-29-63". Tudo antes da última vírgula é o
-    # local (pode ter vírgulas internas, ex. "Jeffersonville, Ind."), e o que
-    # vem depois é a data no formato M(M)-D(D)-AA(AA).
-    LOCATION_DATE_PATTERN = re.compile(r'^\s*(?P<location>.+?),\s*(?P<date>\d{1,2}-\d{1,2}-\d{2,4})\s*$')
+    # Linha de local/data (ou referência de livro/página) que fecha cada
+    # extrato nos livros de citações. Três formatos confirmados no PDF real
+    # do usuário:
+    #   - "Jeffersonville, Ind., 12-29-63"      (cidade, estado, DD-MM-AA)
+    #   - "Little Rock, Ark., 2-50"              (cidade, estado, M(M)-AA -- só mês/ano)
+    #   - "(Libro) Págs. 65-66, 1950"             (referência de livro/página, só ano)
+    # Tudo antes da última vírgula é o "local" (pode ter vírgulas internas,
+    # ex. "Jeffersonville, Ind." ou ser uma referência de livro/página em vez
+    # de cidade), e o que vem depois é a data, em uma de três formas: dia-mês-
+    # ano completo, mês-ano, ou só o ano.
+    # CONFIRMADO com dado real: sem o formato "só ano", a linha de fechamento
+    # do extrato 7 ("Un Hombre Enviado de Dios" / "(Libro) Págs. 65-66, 1950")
+    # nunca era reconhecida como atribuição -- o extrato seguia acumulando
+    # texto sem nunca fechar com título/local/data corretos.
+    LOCATION_DATE_PATTERN = re.compile(
+        r'^\s*(?P<location>.+?),\s*'
+        r'(?P<date>\d{1,2}-\d{1,2}-\d{2,4}|\d{1,2}-\d{2,4}|\d{4})'
+        r'\s*$'
+    )
 
     @classmethod
     def analyze_text_span(cls, text: str, bbox: List[float], page_width: float, page_height: float) -> Dict[str, Any]:
