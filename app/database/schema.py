@@ -95,6 +95,22 @@ class DatabaseSchemaManager:
             );
             """)
 
+            # Índices nas colunas de chave estrangeira / busca frequente. SEM
+            # eles, toda exclusão ou reimportação de documento (que dispara
+            # DELETE em cascata, ex.: documento -> páginas -> entry_chunks)
+            # obriga o SQLite a varrer a tabela inteira pra achar as linhas
+            # relacionadas — numa tabela com dezenas de milhares de linhas
+            # (entry_chunks tem uma linha por linha de texto do PDF), isso é
+            # visivelmente lento. Com índice, vira uma busca quase instantânea.
+            # IF NOT EXISTS torna seguro rodar em bancos já existentes também.
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pages_document_id ON pages (document_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pages_printed_label ON pages (printed_page_label);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_paragraphs_page_id ON paragraphs (page_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_text_entries_document_id ON text_entries (document_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_text_entries_entry_number ON text_entries (entry_number);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_entry_chunks_entry_id ON entry_chunks (entry_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_entry_chunks_page_id ON entry_chunks (page_id);")
+
             # Tabelas Virtuais SQLite FTS5 para busca textual ultra-rápida
             cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS fts_paragraphs USING fts5(
