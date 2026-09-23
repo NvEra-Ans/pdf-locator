@@ -46,11 +46,33 @@ class PatternDetector:
     # número; extratos são sempre dígitos puros).
     PART_PAGE_LABEL_PATTERN = re.compile(r'^\s*(\d{1,4})\s*[\-\–\—]\s*([AB])\s*$')
 
-    # Número do extrato: SEMPRE dígitos puros no início da linha (confirmado
-    # no texto real do livro — nenhum extrato genuíno tem letra colada ao
-    # número; sufixos de letra só aparecem em marcadores de página, tratados
-    # separadamente acima).
-    PARAGRAPH_PATTERN = re.compile(r'^\s*(\d{1,4})\s*[\-\–\—\.]?\s*')
+    # Número do extrato: dígitos no início da linha SEGUIDOS DE TRAÇO
+    # ("N - texto"). Confirmado em todo extrato real visto até agora: sempre
+    # "N - " com traço e espaço, nunca vírgula, nunca ponto.
+    #
+    # BUG real encontrado com dado do usuario: o separador era opcional
+    # (`[\-\–\—\.]?`) e o ponto tambem contava como separador valido. Isso
+    # fazia QUALQUER linha comecando com digito virar um "novo extrato" por
+    # engano -- inclusive linhas que sao continuacao do corpo, tipo listas
+    # numeradas dentro da propria citacao ("4, Hebreos 4:12, todas estas
+    # Escrituras...", "4, San Lucas 17, San Juan 15...") ou uma citacao
+    # biblica fechando com ponto ("4.' / Pero recuerden..."). Isso criava
+    # extratos fantasma tipo "4" repetidos em varias paginas (7, 78, 129,
+    # 143, 156), todos errados, cortando o extrato real ao meio.
+    #
+    # Corrigido exigindo o traço (obrigatorio, nao mais opcional) e removendo
+    # o ponto da lista de separadores aceitos -- nenhum extrato real
+    # confirmado usa ponto como separador, so vírgula/ponto apareceram em
+    # listas numeradas DENTRO do corpo do texto, nunca abrindo um extrato de
+    # verdade.
+    #
+    # RISCO CONHECIDO (nao verificado): se existir, em algum lugar do livro
+    # que eu ainda nao vi, um extrato real que usa ponto (".") como separador
+    # em vez de traço, essa mudança vai deixar de reconhecer esse extrato
+    # como uma entrada nova (o texto dele ficaria colado no extrato anterior,
+    # em vez de virar sua propria entrada). Nao tenho como confirmar isso sem
+    # rodar contra o livro inteiro.
+    PARAGRAPH_PATTERN = re.compile(r'^\s*(\d{1,4})\s*[\-\–\—]\s+')
 
     # Número grande formatado ao estilo espanhol/latino, com ponto separando
     # milhares (ex.: "300.000", "1.234.567") — NAO pode ser confundido com
