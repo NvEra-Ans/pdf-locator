@@ -2,9 +2,39 @@ import re
 from typing import Dict, Any, List
 
 class PatternDetector:
-    """Detecta padrões de números de página e de parágrafo no texto extraído do PDF."""
+    """Detecta padrões de números de página e de parágrafo no texto extraído do PDF.
+
+    IMPORTANTE (aprendido com o PDF real do usuário): a ideia original de usar
+    uma "zona" de cabeçalho/rodapé por posição na página (topo/rodapé em %)
+    NÃO funciona nesse livro — as margens reais são pequenas demais e não tem
+    "zona morta" nenhuma entre o título do cabeçalho e o começo do corpo do
+    texto. Diagnóstico real mostrou extratos inteiros começando a 1 linha de
+    distância do cabeçalho (ex.: extrato 44 na pág. 11), sendo descartados por
+    inteiro porque caíam dentro dos 12% do topo.
+    A abordagem que funciona é reconhecer cabeçalho/rodapé pelo CONTEÚDO da
+    linha, não pela posição:
+      - número de página / marcador Parte A-B: só reconhecido quando a linha
+        INTEIRA é isso e mais nada (os padrões abaixo são ancorados no início
+        E no fim, "^...$") — uma linha real de extrato sempre tem texto extra
+        depois do número, então nunca bate por engano nessas expressões.
+      - título repetido do livro (cabeçalho de página): reconhecido pelo
+        texto exato (comparação, não posição) contra os títulos conhecidos,
+        mais um heurístico genérico de "linha inteira em maiúsculas" (títulos
+        de cabeçalho são sempre em caixa alta; texto do corpo sempre tem
+        palavras em minúscula).
+    """
 
     PAGE_NUMBER_PATTERN = re.compile(r'^\s*(?:pág|pág\.|página|page)?\s*(\d+[A-Za-z]?)\s*$', re.IGNORECASE)
+
+    # Títulos de cabeçalho conhecidos, repetidos em (quase) toda página do
+    # livro, alternando entre título da obra e nome do autor (padrão clássico
+    # de página par/ímpar). Comparação é feita em maiúsculas, ignorando
+    # acentos não é necessário aqui pois o texto já vem com acentuação
+    # consistente do PDF.
+    KNOWN_HEADER_TITLES = frozenset([
+        "CITAS DEL MENSAJE DEL PROFETA",
+        "WILLIAM MARRION BRANHAM",
+    ])
 
     # Marcador de "Parte A" / "Parte B" (ex.: livro de citações com um corpo
     # principal numerado 1..1539 e mais duas seções extras ("Parte A", "Parte
@@ -55,49 +85,58 @@ class PatternDetector:
 
         clean_text = text.strip()
 
-        # Zona de cabeçalho/rodapé da página (topo 12% / rodapé 12%).
-        is_header_or_footer = False
-        if bbox:
-            top_y = bbox[1]
-            bottom_y = bbox[3]
-            if top_y < page_height * 0.12 or bottom_y > page_height * 0.88:
-                is_header_or_footer = True
-        result["is_header_or_footer"] = is_header_or_footer
+        # 1. Marcador de Parte A/B: reconhecido pelo padrão ancorado no início
+        # E no fim da linha ("^...$") — uma linha real de extrato sempre tem
+        # texto além do número+letra, então nunca bate aqui por engano. Não
+        # depende mais de posição na página (ver docstring da classe).
+        part_match = cls.PART_PAGE_LABEL_PATTERN.match(clean_text)
+        if part_match:
+            result["is_part_label_candidate"] = True
+            result["detected_part"] = part_match.group(2)
+            result["detected_label"] = part_match.group(1)
+            result["confidence_page_label"] = 0.95
+            result["is_header_or_footer"] = True
+            return result
 
-        # Marcador de Parte A/B — só conta se estiver no cabeçalho/rodapé
-        # (mesma zona onde os números de página normais aparecem).
-        if is_header_or_footer:
-            part_match = cls.PART_PAGE_LABEL_PATTERN.match(clean_text)
-            if part_match:
-                result["is_part_label_candidate"] = True
-                result["detected_part"] = part_match.group(2)
-                result["detected_label"] = part_match.group(1)
-                result["confidence_page_label"] = 0.95
-
+        # 2. Número de página sozinho na linha: mesma lógica, padrão ancorado
+        # nas duas pontas, não depende de posição.
         page_match = cls.PAGE_NUMBER_PATTERN.match(clean_text)
-        if page_match and is_header_or_footer and not result["is_part_label_candidate"]:
+        if page_match:
             result["is_page_number_candidate"] = True
             result["detected_label"] = page_match.group(1)
             result["confidence_page_label"] = 0.95
+            result["is_header_or_footer"] = True
+            return result
 
-        # Check for paragraph candidate — mas NUNCA no cabeçalho/rodapé
-        # (ali só existe número de página avulso ou o cabeçalho repetido do
-        # livro, nunca o início de um extrato de verdade) nem se for uma
-        # referência "cap:versículo".
-        if not is_header_or_footer and not cls.VERSE_REFERENCE_PATTERN.match(clean_text):
+        # 3. Início de um extrato numerado (ex.: "44 - ..."), a menos que seja
+        # uma referência bíblica "capítulo:versículo".
+        if not cls.VERSE_REFERENCE_PATTERN.match(clean_text):
             para_match = cls.PARAGRAPH_PATTERN.match(clean_text)
             if para_match:
                 result["is_paragraph_candidate"] = True
                 result["detected_paragraph_num"] = para_match.group(1)
+                return result
 
-        # Check for a "Cidade, Estado., DD-MM-AA" attribution line (fecha um
-        # extrato). Uma linha que já foi reconhecida como início de novo
-        # parágrafo/extrato não pode ser também uma linha de atribuição.
-        if not result["is_paragraph_candidate"]:
-            loc_match = cls.LOCATION_DATE_PATTERN.match(clean_text)
-            if loc_match:
-                result["is_location_date_candidate"] = True
-                result["detected_location"] = loc_match.group("location").strip()
-                result["detected_date"] = loc_match.group("date").strip()
+        # 4. Linha "Cidade, Estado., DD-MM-AA" que fecha um extrato.
+        loc_match = cls.LOCATION_DATE_PATTERN.match(clean_text)
+        if loc_match:
+            result["is_location_date_candidate"] = True
+            result["detected_location"] = loc_match.group("location").strip()
+            result["detected_date"] = loc_match.group("date").strip()
+            return result
+
+        # 5. Título de cabeçalho repetido do livro: reconhecido pelo texto
+        # exato (contra os títulos conhecidos) OU pelo heurístico de "linha
+        # inteira em maiúsculas" (títulos de cabeçalho são sempre em caixa
+        # alta; texto real do corpo sempre tem alguma palavra em minúscula).
+        # Isso substitui a antiga checagem por posição/zona da página, que se
+        # mostrou incorreta no PDF real (corpo de extrato caindo dentro da
+        # "zona" só por estar perto do topo/rodapé da página).
+        has_letters = any(c.isalpha() for c in clean_text)
+        # clean_text == clean_text.upper() já garante que não há nenhuma
+        # letra minúscula na linha (se houvesse, a comparação falharia).
+        is_all_caps = has_letters and clean_text == clean_text.upper()
+        if clean_text.upper() in cls.KNOWN_HEADER_TITLES or is_all_caps:
+            result["is_header_or_footer"] = True
 
         return result
