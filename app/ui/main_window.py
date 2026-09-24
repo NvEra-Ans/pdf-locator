@@ -293,6 +293,21 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------------- Tema
 
+    def closeEvent(self, event):
+        # Tela de Leitura e Histórico agora são criadas SEM parent (ver
+        # comentários em _toggle_mirror_window/_show_history_window), de
+        # propósito, pra não minimizar/recentralizar junto com esta
+        # janela. Efeito colateral: elas não fecham mais sozinhas quando
+        # a janela principal fecha (isso era o Qt fazendo limpeza
+        # automática de widgets-filhos) -- então fechamos explicitamente
+        # aqui, pra não deixar uma janela órfã aberta depois que o app
+        # "fechou".
+        if self.mirror_window is not None:
+            self.mirror_window.close()
+        if self.history_window is not None:
+            self.history_window.close()
+        super().closeEvent(event)
+
     def _apply_theme(self):
         QApplication.instance().setStyleSheet(self.theme.stylesheet())
         self.btn_theme.setText("☀️ Modo Claro" if self.theme.is_dark() else "🌙 Modo Escuro")
@@ -670,7 +685,19 @@ class MainWindow(QMainWindow):
 
     def _toggle_mirror_window(self):
         if self.mirror_window is None:
-            self.mirror_window = MirrorWindow(self)
+            # BUG real reportado pelo usuário: passar "self" (a janela
+            # principal) como parent aqui fazia o Windows tratar a Tela de
+            # Leitura como uma janela "possuída" pela janela principal --
+            # minimizar o app principal minimizava a Tela de Leitura
+            # junto, e restaurar o app principal fazia a Tela de Leitura
+            # voltar RECENTRALIZADA, perdendo a posição no monitor 2 que
+            # o usuário tinha arrastado manualmente. Pedido explícito do
+            # usuário: ela deve continuar ativa e na mesma posição mesmo
+            # com o app principal minimizado -- por isso agora é criada
+            # SEM parent (janela totalmente independente). Isso significa
+            # que ela não fecha mais sozinha quando a janela principal
+            # fecha, então closeEvent() abaixo fecha ela explicitamente.
+            self.mirror_window = MirrorWindow()
 
         if self.mirror_window.isVisible():
             # Já está aberta -- só traz pra frente, não fecha (o usuário
@@ -692,7 +719,9 @@ class MainWindow(QMainWindow):
 
     def _show_history_window(self):
         if self.history_window is None:
-            self.history_window = HistoryWindow(self.search_history, self)
+            # Mesmo motivo do MirrorWindow logo acima: sem parent, pra não
+            # ficar presa ao minimizar/restaurar a janela principal.
+            self.history_window = HistoryWindow(self.search_history)
         else:
             # Recarrega do banco sempre que reabre -- reflete buscas
             # feitas depois da última vez que essa janela foi aberta.

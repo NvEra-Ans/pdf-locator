@@ -12,6 +12,13 @@ com o usuário:
   - Posição da janela é responsabilidade do usuário (arrasta pro
     monitor 2 manualmente toda vez que abre) -- não salva posição
     entre sessões.
+  - Fica ativa mesmo se o app principal for minimizado (pedido real do
+    usuário -- ver nota em MainWindow._toggle_mirror_window sobre não
+    passar `self` como parent, exatamente por causa disso).
+  - Tem um modo Tela Cheia (sem a barra do Windows com
+    minimizar/maximizar/fechar), pra apresentação/tradução -- sai do
+    modo tela cheia clicando na janela e apertando Esc, ou clicando de
+    novo no botão.
 """
 import html
 
@@ -57,6 +64,13 @@ class MirrorWindow(QWidget):
         self.btn_font_plus.clicked.connect(self._increase_font)
         top_bar.addWidget(self.btn_font_plus)
 
+        # PEDIDO REAL do usuário: modo apresentação, sem a barra do
+        # Windows (minimizar/maximizar/fechar) ocupando espaço na tela.
+        self.btn_fullscreen = QPushButton("⛶ Tela Cheia")
+        self.btn_fullscreen.setToolTip("Tela cheia, sem a barra de título (clique na janela e aperte Esc pra voltar)")
+        self.btn_fullscreen.clicked.connect(self._toggle_fullscreen)
+        top_bar.addWidget(self.btn_fullscreen)
+
         layout.addLayout(top_bar)
 
         self.txt_body = QTextEdit()
@@ -98,6 +112,26 @@ class MirrorWindow(QWidget):
     def _decrease_font(self):
         self._font_size = max(MIN_FONT_SIZE, self._font_size - FONT_STEP)
         self._apply_font()
+
+    # ----------------------------------------------------------- Tela Cheia
+
+    def _toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showNormal()
+            self.btn_fullscreen.setText("⛶ Tela Cheia")
+        else:
+            self.showFullScreen()
+            self.btn_fullscreen.setText("⛶ Sair da Tela Cheia")
+
+    def keyPressEvent(self, event):
+        # PEDIDO REAL do usuário: apertar Esc (com a janela em foco --
+        # "clicar na janela e digitar esc") sai do modo tela cheia e
+        # devolve a barra de título, sem precisar achar o botão (que fica
+        # menos visível/acessível em tela cheia real).
+        if event.key() == Qt.Key_Escape and self.isFullScreen():
+            self._toggle_fullscreen()
+        else:
+            super().keyPressEvent(event)
 
     # ------------------------------------------------------------ Conteúdo
 
