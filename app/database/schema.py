@@ -116,6 +116,26 @@ class DatabaseSchemaManager:
             );
             """)
 
+            # Histórico de Pesquisas -- pedido real do usuário: registro
+            # cronológico do que foi buscado (e encontrado), pra poder
+            # consultar ou exportar depois (ex.: quais páginas/extratos
+            # foram citados durante a tradução simultânea de um culto).
+            # SEM FOREIGN KEY pra documents de propósito: document_title
+            # é um "retrato" do nome do livro no momento da busca, pra o
+            # histórico continuar fazendo sentido mesmo se o documento for
+            # excluído ou reimportado depois (log não deve sumir/quebrar
+            # junto com o documento).
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS search_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                searched_at TEXT NOT NULL,
+                document_title TEXT NOT NULL,
+                query_summary TEXT NOT NULL,
+                result_summary TEXT NOT NULL
+            );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_history_searched_at ON search_history (searched_at);")
+
             # Índices nas colunas de chave estrangeira / busca frequente. SEM
             # eles, toda exclusão ou reimportação de documento (que dispara
             # DELETE em cascata, ex.: documento -> páginas -> entry_chunks)

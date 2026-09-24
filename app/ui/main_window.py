@@ -19,6 +19,8 @@ from app.indexing.citations_indexer import CitationsIndexer
 from app.version import APP_NAME, APP_NAME_SHORT, APP_VERSION
 from app.ui.theme import ThemeManager
 from app.ui.mirror_window import MirrorWindow
+from app.ui.history_window import HistoryWindow
+from app.search.history import SearchHistoryManager
 from app.paths import get_db_path
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
@@ -64,8 +66,10 @@ class MainWindow(QMainWindow):
         # cria uma usando o mesmo caminho "seguro para escrita" (get_db_path).
         self.db_conn = db_conn if db_conn is not None else DatabaseConnection(get_db_path())
         self.search_engine = SearchEngine(self.db_conn)
+        self.search_history = SearchHistoryManager(self.db_conn)
 
         self.mirror_window = None
+        self.history_window = None
 
         self._init_ui()
         self._apply_theme()
@@ -135,6 +139,15 @@ class MainWindow(QMainWindow):
         self.btn_mirror.setToolTip("Abre uma janela separada com o texto encontrado, pra levar pro segundo monitor")
         self.btn_mirror.clicked.connect(self._toggle_mirror_window)
         layout.addWidget(self.btn_mirror)
+
+        # PEDIDO REAL do usuário: registro cronológico das buscas feitas
+        # (e do que foi encontrado), exportável pra um .txt (Bloco de
+        # Notas) -- útil como log de quais páginas/extratos foram usados
+        # numa tradução, por exemplo.
+        self.btn_history = QPushButton("🕘 Histórico")
+        self.btn_history.setToolTip("Mostra o histórico de pesquisas feitas, com opção de exportar ou limpar")
+        self.btn_history.clicked.connect(self._show_history_window)
+        layout.addWidget(self.btn_history)
 
         self.btn_theme = QPushButton("🌙 Modo Escuro")
         self.btn_theme.setObjectName("ThemeToggle")
@@ -480,6 +493,17 @@ class MainWindow(QMainWindow):
         text = self.txt_text.text().strip() or None
         fuzzy = self.chk_fuzzy.isChecked()
 
+        # Guarda os termos usados nesta busca e o título do documento --
+        # usados em _on_search_finished para gravar no Histórico de
+        # Pesquisas (só quando a busca encontra algo, ver
+        # app/search/history.py). Precisam ficar salvos aqui porque a
+        # busca roda numa thread separada e só sabemos se achou algo
+        # quando o resultado volta.
+        self._last_search_doc_title = self.combo_docs.currentText()
+        self._last_search_query_summary = SearchHistoryManager.build_query_summary(
+            page_label=page, paragraph_num=para, entry_num=entry, text_query=text, use_fuzzy=fuzzy
+        )
+
         # A busca roda numa thread separada — uma pesquisa fuzzy sobre um
         # documento grande pode levar vários segundos, e isso não pode
         # travar a janela inteira do aplicativo enquanto processa.
@@ -529,6 +553,16 @@ class MainWindow(QMainWindow):
             # no painel principal quanto na Tela de Leitura do segundo
             # monitor, sem precisar clicar na linha.
             self.table.selectRow(0)
+
+            # PEDIDO REAL do usuário: registra no Histórico de Pesquisas
+            # só quando a busca encontrou algo (busca sem resultado,
+            # tipicamente erro de digitação, não é registrada -- decisão
+            # confirmada com o usuário).
+            self.search_history.log_search(
+                document_title=self._last_search_doc_title,
+                query_summary=self._last_search_query_summary,
+                result_summary=SearchHistoryManager.build_result_summary(self.current_results)
+            )
 
         self.btn_search.setEnabled(True)
         self.btn_search.setText("Pesquisar")
@@ -653,6 +687,23 @@ class MainWindow(QMainWindow):
         row = self.table.currentRow()
         if 0 <= row < len(self.current_results):
             self._on_result_selected()
+
+    # ------------------------------------------------------------ Histórico
+
+    def _show_history_window(self):
+        if self.history_window is None:
+            self.history_window = HistoryWindow(self.search_history, self)
+        else:
+            # Recarrega do banco sempre que reabre -- reflete buscas
+            # feitas depois da última vez que essa janela foi aberta.
+            self.history_window.reload()
+
+        if self.history_window.isVisible():
+            self.history_window.raise_()
+            self.history_window.activateWindow()
+            return
+
+        self.history_window.show()
 
     # --------------------------------------------------------------- Ações
 
