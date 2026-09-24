@@ -1,11 +1,19 @@
 """Temas claro/escuro da aplicação (QSS) e persistência da preferência do usuário."""
 
+import os
+
 from PySide6.QtCore import QSettings
 
 ORG_NAME = "AVozDoUltimoDia"
 APP_SETTINGS_NAME = "LocalizadorCitacoes"
 
 _FONT_STACK = '"Segoe UI", "Inter", "Noto Sans", Arial, sans-serif'
+
+# Setas do QComboBox usadas nas regras QComboBox::down-arrow abaixo. O Qt
+# style sheet precisa de barras "/" mesmo no Windows, por isso o replace.
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets").replace("\\", "/")
+_ARROW_LIGHT = f"{_ASSETS_DIR}/arrow_down_light.png"
+_ARROW_DARK = f"{_ASSETS_DIR}/arrow_down_dark.png"
 
 LIGHT_QSS = f"""
 QWidget {{
@@ -30,6 +38,15 @@ QMainWindow, QDialog {{
     font-size: 11px;
     color: #8A8F98;
 }}
+/* BUG real (print de tela do usuário): #AppTitleLabel/#AppVersionLabel só
+   sobrescrevem cor/tamanho de fonte, não o fundo -- então herdavam o
+   fundo cinza genérico do "QWidget" lá em cima, formando uma caixa
+   destacada atrás do texto do cabeçalho, tanto no claro quanto no escuro.
+   Regra abaixo cobre qualquer QLabel dentro do cabeçalho (título, versão,
+   logo), presente ou futuro, em vez de corrigir label por label. */
+#HeaderBar QLabel {{
+    background: transparent;
+}}
 QLineEdit, QComboBox {{
     background-color: #FFFFFF;
     border: 1px solid #D6D9DE;
@@ -39,6 +56,27 @@ QLineEdit, QComboBox {{
 }}
 QLineEdit:focus, QComboBox:focus {{
     border: 1px solid #C9A227;
+}}
+/* BUG real (print de tela do usuário): sem estas regras, o estilo Fusion
+   desenha seu próprio botão/moldura padrão em volta da seta do combo,
+   criando uma linha vertical e cantos retos destoando do resto da caixa
+   (que é arredondada). Removendo a moldura própria do "drop-down" e
+   deixando-o transparente, ele passa a se misturar com a borda geral do
+   QComboBox em vez de aparecer como uma caixa separada.
+   Atenção: assim que QComboBox::drop-down recebe QUALQUER regra própria,
+   o Fusion para de desenhar sozinho a setinha padrão (testado e
+   confirmado) -- por isso precisamos fornecer nossa própria imagem via
+   QComboBox::down-arrow, ou a caixa fica sem nenhum indicador visual de
+   que é um combo. */
+QComboBox::drop-down {{
+    border: none;
+    background: transparent;
+    width: 22px;
+}}
+QComboBox::down-arrow {{
+    image: url({_ARROW_LIGHT});
+    width: 10px;
+    height: 6px;
 }}
 QPushButton {{
     background-color: #FFFFFF;
@@ -138,6 +176,9 @@ QMainWindow, QDialog {{
     font-size: 11px;
     color: #8A8F98;
 }}
+#HeaderBar QLabel {{
+    background: transparent;
+}}
 QLineEdit, QComboBox {{
     background-color: #23262B;
     border: 1px solid #3A3E45;
@@ -148,6 +189,16 @@ QLineEdit, QComboBox {{
 }}
 QLineEdit:focus, QComboBox:focus {{
     border: 1px solid #C9A227;
+}}
+QComboBox::drop-down {{
+    border: none;
+    background: transparent;
+    width: 22px;
+}}
+QComboBox::down-arrow {{
+    image: url({_ARROW_DARK});
+    width: 10px;
+    height: 6px;
 }}
 QComboBox QAbstractItemView {{
     background-color: #23262B;
