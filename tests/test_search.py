@@ -38,6 +38,11 @@ class TestSearchEngine(unittest.TestCase):
                 "INSERT INTO paragraphs (page_id, paragraph_number, text, normalized_text) VALUES (?, ?, ?, ?)",
                 (page_id, "140", "Este e o texto do paragrafo 140.", "este e o texto do paragrafo 140.")
             )
+            para_id = cursor.lastrowid
+            cursor.execute(
+                "INSERT INTO paragraph_chunks (paragraph_id, page_id, chunk_text) VALUES (?, ?, ?)",
+                (para_id, page_id, "Este e o texto do paragrafo 140.")
+            )
             conn.commit()
 
         results = self.search_engine.search(document_id=doc_id, page_label="14A", paragraph_num="140")

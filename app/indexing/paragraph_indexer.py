@@ -16,6 +16,23 @@ class ParagraphIndexer(BaseIndexer):
         with self.db_conn.get_connection() as conn:
             cursor = conn.cursor()
 
+            # BUG real encontrado com dado do usuario (livro "La Revelacion
+            # de Los Siete Sellos"): current_para_num/current_para_text
+            # antes eram declarados DENTRO do loop de paginas (resetados a
+            # cada pagina nova). Isso fazia o texto de um paragrafo que
+            # comeca numa pagina e continua na seguinte (comum em sermao
+            # corrido) ser CORTADO -- a parte que sobrava no comeco da
+            # proxima pagina, antes do proximo numero de paragrafo aparecer,
+            # nao tinha onde ser salva (current_para_num virava None de
+            # novo) e era perdida por completo, sem erro nenhum. Corrigido
+            # movendo esse estado pra FORA do loop de paginas, igual ja
+            # funciona no citations_indexer.py (active_entry_id/text).
+            current_para_id = None
+            current_para_num = None
+            current_para_text = []
+            current_bbox = None
+            printed_label = "1"
+
             for page_idx in range(len(doc)):
                 page = doc[page_idx]
                 width, height = page.rect.width, page.rect.height
@@ -46,10 +63,6 @@ class ParagraphIndexer(BaseIndexer):
                 # parágrafos, para não cortar parágrafos que atravessam colunas.
                 blocks = order_blocks_reading_order(raw_blocks, width, height)
 
-                current_para_num = None
-                current_para_text = []
-                current_bbox = None
-
                 # IMPORTANTE: o teste de "isso começa um novo parágrafo?" precisa
                 # ser feito LINHA por LINHA, não por bloco inteiro — o PyMuPDF às
                 # vezes agrupa no mesmo bloco o fim de um parágrafo e o início do
@@ -76,55 +89,82 @@ class ParagraphIndexer(BaseIndexer):
                         # titulo do capitulo, ou paginas quase em branco tipo
                         # "Notas" entre capitulos): nao e conteudo de
                         # paragrafo nenhum, nao deve acumular no corpo.
-                        #
-                        # BUG real encontrado com dado do usuario (livro "La
-                        # Revelacion de Los Siete Sellos", perfil Tipo A):
-                        # esse indexador nunca tratava is_header_or_footer
-                        # (nem is_page_number_candidate) -- toda linha que
-                        # nao fosse um novo paragrafo caia direto no corpo do
-                        # paragrafo aberto, entao o titulo do livro/capitulo
-                        # (repetido em toda pagina) e a palavra "Notas" (nas
-                        # paginas quase em branco entre capitulos) vazavam
-                        # pro paragrafo anterior. Corrigido com "continue",
-                        # igual ja acontece no indexador do Tipo B.
                         if res["is_page_number_candidate"] or res["is_part_label_candidate"] or res["is_header_or_footer"]:
                             continue
 
-                        if res["is_paragraph_candidate"]:
-                            # Salva parágrafo anterior
-                            if current_para_num and current_para_text:
-                                full_text = " ".join(current_para_text)
-                                norm_text = self.normalize_text(full_text)
-                                cursor.execute(
-                                    "INSERT INTO paragraphs (page_id, paragraph_number, text, normalized_text, bbox) VALUES (?, ?, ?, ?, ?)",
-                                    (page_db_id, current_para_num, full_text, norm_text, json.dumps(current_bbox))
-                                )
-                                para_db_id = cursor.lastrowid
-                                cursor.execute(
-                                    "INSERT INTO fts_paragraphs VALUES (?, ?, ?, ?, ?)",
-                                    (para_db_id, doc_id, printed_label, current_para_num, norm_text)
-                                )
+                        # Ainda não há parágrafo ativo (ex.: texto de capa/
+                        # introdução antes do primeiro "N." do livro): abre
+                        # uma entrada de introdução, igual ja acontece no
+                        # citations_indexer.py, pra nao perder esse texto.
+                        if current_para_id is None:
+                            current_para_id = self._start_paragraph(cursor, page_db_id, "Intro/Capa")
+                            current_para_num = "Intro/Capa"
+                            current_para_text = []
+                            current_bbox = bbox
 
+                        # Linha inicia um novo parágrafo numerado -> fecha o
+                        # anterior (que pode ter chunks em varias paginas
+                        # diferentes) e abre este.
+                        if res["is_paragraph_candidate"]:
+                            self._close_paragraph(cursor, current_para_id, doc_id, printed_label, current_para_text)
                             current_para_num = res["detected_paragraph_num"]
+                            current_para_id = self._start_paragraph(cursor, page_db_id, current_para_num)
                             current_para_text = [line_text]
                             current_bbox = bbox
                         else:
-                            if current_para_num:
-                                current_para_text.append(line_text)
+                            current_para_text.append(line_text)
 
-                # Salva o último parágrafo da página se houver
-                if current_para_num and current_para_text:
-                    full_text = " ".join(current_para_text)
-                    norm_text = self.normalize_text(full_text)
-                    cursor.execute(
-                        "INSERT INTO paragraphs (page_id, paragraph_number, text, normalized_text, bbox) VALUES (?, ?, ?, ?, ?)",
-                        (page_db_id, current_para_num, full_text, norm_text, json.dumps(current_bbox))
-                    )
-                    para_db_id = cursor.lastrowid
-                    cursor.execute(
-                        "INSERT INTO fts_paragraphs VALUES (?, ?, ?, ?, ?)",
-                        (para_db_id, doc_id, printed_label, current_para_num, norm_text)
-                    )
+                        # Chunk por pagina, igual ao entry_chunks do Tipo B --
+                        # e o que permite reconstruir o texto exato de UMA
+                        # pagina fisica (busca por pagina), mesmo quando um
+                        # paragrafo comeca numa pagina e continua na
+                        # seguinte.
+                        cursor.execute(
+                            "INSERT INTO paragraph_chunks (paragraph_id, page_id, chunk_text, bbox) VALUES (?, ?, ?, ?)",
+                            (current_para_id, page_db_id, line_text, json.dumps(bbox))
+                        )
+
+            # Fecha o último parágrafo pendente ao final do documento
+            if current_para_id is not None:
+                self._close_paragraph(cursor, current_para_id, doc_id, printed_label, current_para_text)
 
             conn.commit()
         return True
+
+    def _start_paragraph(self, cursor, page_id: int, paragraph_number: str) -> int:
+        """Cria a linha em paragraphs e retorna o id (o texto é preenchido depois, em _close_paragraph).
+        `page_id` aqui é só a página onde o parágrafo ABRIU -- para saber
+        exatamente o que aparece em cada página física (parágrafo que
+        atravessa página), use paragraph_chunks, não este campo."""
+        cursor.execute(
+            "INSERT INTO paragraphs (page_id, paragraph_number, text, normalized_text) VALUES (?, ?, ?, ?)",
+            (page_id, paragraph_number, "", "")
+        )
+        return cursor.lastrowid
+
+    def _close_paragraph(self, cursor, paragraph_id: int, doc_id: int, printed_label: str, text_parts) -> None:
+        """Consolida o texto acumulado do parágrafo (todos os chunks, de
+        todas as páginas por onde ele passou) e grava em paragraphs +
+        fts_paragraphs."""
+        full_text = " ".join(text_parts).strip()
+        norm_text = self.normalize_text(full_text)
+
+        cursor.execute("SELECT paragraph_number FROM paragraphs WHERE id = ?", (paragraph_id,))
+        row = cursor.fetchone()
+        paragraph_number = row[0] if row else ""
+
+        cursor.execute(
+            "UPDATE paragraphs SET text = ?, normalized_text = ? WHERE id = ?",
+            (full_text, norm_text, paragraph_id)
+        )
+
+        if not full_text:
+            # Parágrafo "casca vazia" (abriu mas não acumulou nenhum texto
+            # real) -- mantém a linha em paragraphs (dado bruto, útil pra
+            # depurar), mas não entra no índice de busca.
+            return
+
+        cursor.execute(
+            "INSERT INTO fts_paragraphs VALUES (?, ?, ?, ?, ?)",
+            (paragraph_id, doc_id, printed_label, paragraph_number, norm_text)
+        )

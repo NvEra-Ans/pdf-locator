@@ -95,6 +95,27 @@ class DatabaseSchemaManager:
             );
             """)
 
+            # Tabela de Chunks para vincular Parágrafos às Páginas (Perfil
+            # Tipo A) -- mesmo papel do entry_chunks acima, mas pra
+            # parágrafos. BUG real encontrado com dado do usuário: um
+            # parágrafo que começa numa página e continua na seguinte
+            # (comum em livro de sermão corrido) perdia o texto que sobrava
+            # na página seguinte por completo, porque o indexador antigo não
+            # rastreava o parágrafo aberto entre páginas -- sem essa tabela,
+            # não tem como reconstruir corretamente o texto de UMA página
+            # física quando um parágrafo é cortado no meio dela.
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS paragraph_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                paragraph_id INTEGER NOT NULL,
+                page_id INTEGER NOT NULL,
+                chunk_text TEXT NOT NULL,
+                bbox TEXT,
+                FOREIGN KEY (paragraph_id) REFERENCES paragraphs (id) ON DELETE CASCADE,
+                FOREIGN KEY (page_id) REFERENCES pages (id) ON DELETE CASCADE
+            );
+            """)
+
             # Índices nas colunas de chave estrangeira / busca frequente. SEM
             # eles, toda exclusão ou reimportação de documento (que dispara
             # DELETE em cascata, ex.: documento -> páginas -> entry_chunks)
@@ -110,6 +131,8 @@ class DatabaseSchemaManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_text_entries_entry_number ON text_entries (entry_number);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_entry_chunks_entry_id ON entry_chunks (entry_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_entry_chunks_page_id ON entry_chunks (page_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_paragraph_chunks_paragraph_id ON paragraph_chunks (paragraph_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_paragraph_chunks_page_id ON paragraph_chunks (page_id);")
 
             # Tabelas Virtuais SQLite FTS5 para busca textual ultra-rápida
             cursor.execute("""

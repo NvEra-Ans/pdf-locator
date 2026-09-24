@@ -60,18 +60,30 @@ class SearchEngine:
                 # número específico em qualquer capítulo do livro (a
                 # numeração reinicia por capítulo, ver PatternDetector).
                 if page_label:
+                    # Reconstroi o texto a partir de paragraph_chunks (nao
+                    # de paragraphs.text) -- e o unico jeito de recuperar
+                    # corretamente o pedaco de um paragrafo que COMECOU na
+                    # pagina anterior e so termina nesta (ex.: pagina 10
+                    # comecando com o final do paragrafo 31, antes do "32."
+                    # aparecer). paragraphs.text tem o texto INTEIRO do
+                    # paragrafo (util pra busca por numero de paragrafo
+                    # isolado, no bloco `else` abaixo), mas nao diz o que
+                    # ficou fisicamente em CADA pagina quando ele atravessa
+                    # mais de uma.
                     query = """
                     SELECT d.id as doc_id, d.title, pg.id as page_db_id,
                            pg.pdf_page_index, pg.printed_page_label
                     FROM pages pg
                     JOIN documents d ON pg.document_id = d.id
                     WHERE d.id = ? AND pg.printed_page_label = ?
+                      AND EXISTS (SELECT 1 FROM paragraph_chunks pc WHERE pc.page_id = pg.id)
                     """
                     params = [document_id, page_label]
                     if paragraph_num and profile.supports_paragraph_search:
                         query += """ AND EXISTS (
-                            SELECT 1 FROM paragraphs p2
-                            WHERE p2.page_id = pg.id AND p2.paragraph_number = ?
+                            SELECT 1 FROM paragraph_chunks pc2
+                            JOIN paragraphs p2 ON pc2.paragraph_id = p2.id
+                            WHERE pc2.page_id = pg.id AND p2.paragraph_number = ?
                         )"""
                         params.append(paragraph_num)
 
@@ -80,16 +92,32 @@ class SearchEngine:
 
                     for pr in page_rows:
                         cursor.execute(
-                            "SELECT paragraph_number, text, normalized_text FROM paragraphs "
-                            "WHERE page_id = ? ORDER BY id",
+                            "SELECT pc.paragraph_id, pc.chunk_text, p.paragraph_number FROM paragraph_chunks pc "
+                            "JOIN paragraphs p ON pc.paragraph_id = p.id "
+                            "WHERE pc.page_id = ? ORDER BY pc.id",
                             (pr["page_db_id"],)
                         )
-                        para_rows = cursor.fetchall()
-                        if not para_rows:
+                        chunk_rows = cursor.fetchall()
+                        if not chunk_rows:
                             continue
 
-                        content = "\n\n".join(p["text"] for p in para_rows)
-                        content_norm = " ".join(p["normalized_text"] for p in para_rows)
+                        # Agrupa os chunks (linhas) por parágrafo consecutivo,
+                        # juntando as linhas de um mesmo parágrafo com espaço
+                        # (reconstrói a frase) e separando parágrafos
+                        # diferentes com quebra dupla (parágrafo novo).
+                        para_groups = []
+                        for c in chunk_rows:
+                            if para_groups and para_groups[-1]["paragraph_id"] == c["paragraph_id"]:
+                                para_groups[-1]["lines"].append(c["chunk_text"])
+                            else:
+                                para_groups.append({
+                                    "paragraph_id": c["paragraph_id"],
+                                    "paragraph_number": c["paragraph_number"],
+                                    "lines": [c["chunk_text"]],
+                                })
+
+                        content = "\n\n".join(" ".join(g["lines"]) for g in para_groups)
+                        content_norm = BaseIndexer.normalize_text(content)
                         score = 100.0
 
                         if norm_text:
@@ -101,8 +129,8 @@ class SearchEngine:
                                 if norm_text not in content_norm:
                                     continue
 
-                        first_num = para_rows[0]["paragraph_number"]
-                        last_num = para_rows[-1]["paragraph_number"]
+                        first_num = para_groups[0]["paragraph_number"]
+                        last_num = para_groups[-1]["paragraph_number"]
                         range_label = first_num if first_num == last_num else f"{first_num}-{last_num}"
 
                         results.append(SearchResult(

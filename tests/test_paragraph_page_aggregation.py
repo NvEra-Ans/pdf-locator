@@ -42,9 +42,19 @@ def _setup_db(tmp_path):
             "INSERT INTO paragraphs (page_id, paragraph_number, text, normalized_text) VALUES (?, ?, ?, ?)",
             (page_id_10, "32", "32. Ahora deseo leer en el primer libro de Crónicas.", "32 ahora deseo leer en el primer libro de cronicas.")
         )
+        para_id_32 = cursor.lastrowid
+        cursor.execute(
+            "INSERT INTO paragraph_chunks (paragraph_id, page_id, chunk_text) VALUES (?, ?, ?)",
+            (para_id_32, page_id_10, "32. Ahora deseo leer en el primer libro de Crónicas.")
+        )
         cursor.execute(
             "INSERT INTO paragraphs (page_id, paragraph_number, text, normalized_text) VALUES (?, ?, ?, ?)",
             (page_id_10, "33", "33. Quisiera decir aquí que David vio la misma cosa.", "33 quisiera decir aqui que david vio la misma cosa.")
+        )
+        para_id_33 = cursor.lastrowid
+        cursor.execute(
+            "INSERT INTO paragraph_chunks (paragraph_id, page_id, chunk_text) VALUES (?, ?, ?)",
+            (para_id_33, page_id_10, "33. Quisiera decir aquí que David vio la misma cosa.")
         )
         conn.commit()
 
