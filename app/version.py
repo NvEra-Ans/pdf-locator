@@ -2,7 +2,7 @@
 
 APP_NAME = "Localizador de Citações — A Voz do Último Dia"
 APP_NAME_SHORT = "Localizador de Citações"
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.4.1"
 
 # Repositório GitHub usado pelo verificador de atualizações (app/updater.py).
 # Ajuste GITHUB_REPO se o nome do repositório for diferente.
