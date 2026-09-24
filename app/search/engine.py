@@ -10,6 +10,59 @@ class SearchEngine:
     def __init__(self, db_conn: DatabaseConnection):
         self.db_conn = db_conn
 
+    def get_next_page_with_content(self, document_id: int, current_page_label: str) -> Optional[str]:
+        """Acha o próximo número de página (maior que o atual) que tem
+        conteúdo indexado de verdade, pulando páginas "buraco" sem texto
+        (ex.: números que não existem porque a página é abertura de
+        capítulo/Notas sem conteúdo próprio -- ver paragraph_indexer.py).
+
+        PEDIDO REAL do usuário: botão de "Próxima Página" pra continuar a
+        leitura sem precisar digitar o número manualmente. Decisão
+        confirmada com o usuário: pular buracos sem conteúdo, não parar
+        neles -- leitura contínua é a prioridade.
+
+        Só funciona quando o rótulo de página atual é puramente numérico
+        (ex.: "53"). Rótulos alfanuméricos (ex.: "14A", usados no livro de
+        citações) não têm uma noção clara de "próximo" e retornam None --
+        o chamador deve desabilitar o botão nesse caso.
+        """
+        if not current_page_label or not current_page_label.isdigit():
+            return None
+        current_num = int(current_page_label)
+
+        with self.db_conn.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT profile_type FROM documents WHERE id = ?", (document_id,))
+            doc_row = cursor.fetchone()
+            if not doc_row:
+                return None
+            profile = DocumentIndexProfile.get_profile(ProfileType(doc_row["profile_type"]))
+
+            if profile.profile_type == ProfileType.PARAGRAPH_BOOK:
+                chunk_table = "paragraph_chunks"
+            else:
+                chunk_table = "entry_chunks"
+
+            # GLOB '[0-9]*' + NOT GLOB '*[^0-9]*' = string inteira só com
+            # dígitos (equivalente a um .isdigit() em SQL puro), pra não
+            # quebrar o CAST em páginas com rótulo alfanumérico.
+            cursor.execute(
+                f"""
+                SELECT pg.printed_page_label
+                FROM pages pg
+                WHERE pg.document_id = ?
+                  AND pg.printed_page_label GLOB '[0-9]*'
+                  AND pg.printed_page_label NOT GLOB '*[^0-9]*'
+                  AND CAST(pg.printed_page_label AS INTEGER) > ?
+                  AND EXISTS (SELECT 1 FROM {chunk_table} c WHERE c.page_id = pg.id)
+                ORDER BY CAST(pg.printed_page_label AS INTEGER) ASC
+                LIMIT 1
+                """,
+                (document_id, current_num)
+            )
+            row = cursor.fetchone()
+            return row["printed_page_label"] if row else None
+
     def search(
         self,
         document_id: int,

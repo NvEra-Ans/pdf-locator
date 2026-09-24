@@ -18,6 +18,7 @@ from app.indexing.paragraph_indexer import ParagraphIndexer
 from app.indexing.citations_indexer import CitationsIndexer
 from app.version import APP_NAME, APP_NAME_SHORT, APP_VERSION
 from app.ui.theme import ThemeManager
+from app.ui.mirror_window import MirrorWindow
 from app.paths import get_db_path
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
@@ -63,6 +64,8 @@ class MainWindow(QMainWindow):
         # cria uma usando o mesmo caminho "seguro para escrita" (get_db_path).
         self.db_conn = db_conn if db_conn is not None else DatabaseConnection(get_db_path())
         self.search_engine = SearchEngine(self.db_conn)
+
+        self.mirror_window = None
 
         self._init_ui()
         self._apply_theme()
@@ -118,6 +121,14 @@ class MainWindow(QMainWindow):
 
         layout.addStretch(1)
 
+        # PEDIDO REAL do usuário: tela separada pra espelhar o resultado da
+        # busca no segundo monitor, usada durante tradução simultânea --
+        # o tradutor tem o texto na frente dele sem precisar buscar.
+        self.btn_mirror = QPushButton("🖥️ Tela de Leitura")
+        self.btn_mirror.setToolTip("Abre uma janela separada com o texto encontrado, pra levar pro segundo monitor")
+        self.btn_mirror.clicked.connect(self._toggle_mirror_window)
+        layout.addWidget(self.btn_mirror)
+
         self.btn_theme = QPushButton("🌙 Modo Escuro")
         self.btn_theme.setObjectName("ThemeToggle")
         self.btn_theme.clicked.connect(self._toggle_theme)
@@ -154,6 +165,14 @@ class MainWindow(QMainWindow):
         self.txt_page.returnPressed.connect(self._perform_search)
         search_box.addWidget(self.lbl_page)
         search_box.addWidget(self.txt_page)
+
+        # PEDIDO REAL do usuário: botão pra avançar pra próxima página com
+        # conteúdo sem precisar digitar o número manualmente -- útil pra
+        # leitura contínua. Pula páginas "buraco" sem conteúdo (ver
+        # SearchEngine.get_next_page_with_content).
+        self.btn_next_page = QPushButton("Próxima Página ▶")
+        self.btn_next_page.clicked.connect(self._go_to_next_page)
+        search_box.addWidget(self.btn_next_page)
 
         self.lbl_para = QLabel("Parágrafo:")
         self.txt_para = QLineEdit()
@@ -467,9 +486,48 @@ class MainWindow(QMainWindow):
             self.lbl_detail_header.setText("Nenhum resultado encontrado")
         else:
             self.lbl_detail_header.setText(f"{len(self.current_results)} resultado(s) encontrado(s)")
+            # Seleciona o primeiro resultado automaticamente -- pedido real
+            # do usuário: quando existe só 1 resultado (o caso mais comum
+            # de busca por página), o texto já deve aparecer sozinho, tanto
+            # no painel principal quanto na Tela de Leitura do segundo
+            # monitor, sem precisar clicar na linha.
+            self.table.selectRow(0)
 
         self.btn_search.setEnabled(True)
         self.btn_search.setText("Pesquisar")
+
+    def _go_to_next_page(self):
+        idx = self.combo_docs.currentIndex()
+        if idx < 0:
+            return
+        doc_id = self.combo_docs.itemData(idx)["id"]
+
+        current_page = self.txt_page.text().strip()
+        if not current_page:
+            QMessageBox.information(
+                self, "Próxima Página",
+                "Digite ou pesquise uma página primeiro, pra eu saber de onde avançar."
+            )
+            return
+
+        next_page = self.search_engine.get_next_page_with_content(doc_id, current_page)
+        if not next_page:
+            QMessageBox.information(
+                self, "Próxima Página",
+                f"Não encontrei nenhuma página com conteúdo depois da \"{current_page}\" "
+                "(pode ser o fim do documento, ou a página atual tem um rótulo que não é "
+                "puramente numérico)."
+            )
+            return
+
+        # Avança estritamente por página -- limpa parágrafo/extrato/texto
+        # pra não filtrar a página nova por um número que só fazia sentido
+        # na página anterior.
+        self.txt_page.setText(next_page)
+        self.txt_para.clear()
+        self.txt_entry.clear()
+        self.txt_text.clear()
+        self._perform_search()
 
     def _on_search_failed(self, error_msg):
         self.btn_search.setEnabled(True)
@@ -513,6 +571,34 @@ class MainWindow(QMainWindow):
             )
 
         self.txt_detail.setHtml("".join(html_parts))
+
+        # Atualiza a Tela de Leitura (segundo monitor), se estiver aberta --
+        # automático, sem nenhuma ação do lado de quem está lendo lá.
+        if self.mirror_window is not None and self.mirror_window.isVisible():
+            reference = f"{num_kind} {num_label} · Página {res.printed_page_label}"
+            self.mirror_window.show_result(reference, res.full_text)
+
+    # ------------------------------------------------------- Tela de Leitura
+
+    def _toggle_mirror_window(self):
+        if self.mirror_window is None:
+            self.mirror_window = MirrorWindow(self)
+
+        if self.mirror_window.isVisible():
+            # Já está aberta -- só traz pra frente, não fecha (o usuário
+            # fecha pelo X da própria janela quando quiser).
+            self.mirror_window.raise_()
+            self.mirror_window.activateWindow()
+            return
+
+        self.mirror_window.show()
+
+        # Se já existe um resultado selecionado no painel principal, manda
+        # pra Tela de Leitura assim que ela abre, em vez de esperar a
+        # próxima busca.
+        row = self.table.currentRow()
+        if 0 <= row < len(self.current_results):
+            self._on_result_selected()
 
     # --------------------------------------------------------------- Ações
 
