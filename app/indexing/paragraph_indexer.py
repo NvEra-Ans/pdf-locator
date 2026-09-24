@@ -112,6 +112,21 @@ class ParagraphIndexer(BaseIndexer):
 
                     if has_paragraph_content:
                         last_confirmed_page_num += 1
+                        # [inferência] BUG real encontrado com dado do usuario:
+                        # confirmado em DOIS pontos reais e distintos do livro
+                        # (paginas impressas "53" apos ultima confirmada par
+                        # "52", e "149"/"439" apos ultima confirmada IMPAR
+                        # "147"/"437") que a pagina de abertura de capitulo
+                        # sempre cai em numero IMPAR -- convencao tipografica
+                        # comum de capitulo comecar em pagina recto (impar).
+                        # Quando a ultima confirmada e impar, o proximo numero
+                        # (par) fica "absorvido" por uma das paginas em branco
+                        # sem conteudo proprio, e a abertura pula direto pro
+                        # impar seguinte. NAO verificado exaustivamente nas
+                        # 536 paginas do livro -- baseado no padrao confirmado
+                        # nessas transicoes reais.
+                        if last_confirmed_page_num % 2 == 0:
+                            last_confirmed_page_num += 1
                     printed_label = str(last_confirmed_page_num)
                     page_conf = 0.85  # marca como inferido (menor que detecção real, mas acima do fallback bruto antigo)
 

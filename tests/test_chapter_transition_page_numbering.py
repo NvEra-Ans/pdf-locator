@@ -136,8 +136,94 @@ def test_decorative_block_does_not_leak_into_previous_or_next_paragraph():
     assert "LA BRECHA" not in texts_by_num.get("1", "")
 
 
+def _build_and_index_odd_last_confirmed():
+    """Reproducao do segundo bug real reportado pelo usuario: quando a
+    ultima pagina confirmada ANTES da lacuna e IMPAR (ex.: real "147"),
+    a abertura de capitulo tem que pular um numero PAR (ex.: "148",
+    absorvido por uma das paginas em branco sem conteudo proprio) pra
+    cair no impar seguinte ("149") -- confirmado em dois pontos reais e
+    distintos do livro (149 e 439). O calculo ingenuo antigo
+    (ultimo_confirmado + 1) gerava "148" (par) para a abertura, e o
+    numero real "149" nunca existia no banco."""
+    doc = fitz.open()
+
+    # Pagina fisica 1 ("147" impresso, IMPAR): capitulo em andamento,
+    # paragrafo fica aberto.
+    p1 = doc.new_page(width=432, height=612)
+    p1.insert_text((150, 40), "EL PRIMER SELLO", fontsize=10)
+    p1.insert_text((150, 45), "147", fontsize=10)
+    p1.insert_text((54, 80), "194.\t Texto do paragrafo cento e noventa e quatro que continua aberto.", fontsize=10)
+
+    # Paginas fisicas 2 a 6: "Notas" em branco, sem numero impresso.
+    for _ in range(5):
+        p = doc.new_page(width=432, height=612)
+        p.insert_text((190, 40), "Notas", fontsize=12)
+
+    # Pagina fisica 7: abertura do capitulo novo -- SEM numero impresso.
+    p_open = doc.new_page(width=432, height=612)
+    p_open.insert_text((180, 30), "EL SEGUNDO SELLO", fontsize=10)
+    p_open.insert_text((140, 100), "19 de marzo de 1963 Tabernaculo Branham", fontsize=9)
+    p_open.insert_text((54, 200), "1.\t Texto do primeiro paragrafo do capitulo novo (impar).", fontsize=10)
+
+    # Pagina fisica 8 ("150" impresso): capitulo novo continua normalmente.
+    p_next = doc.new_page(width=432, height=612)
+    p_next.insert_text((150, 40), "LOS SIETE SELLOS", fontsize=10)
+    p_next.insert_text((150, 45), "150", fontsize=10)
+    p_next.insert_text((54, 80), "4.\t Texto do quarto paragrafo, capitulo novo continuando.", fontsize=10)
+
+    tmp_dir = tempfile.mkdtemp()
+    pdf_path = os.path.join(tmp_dir, "test_transicao_impar.pdf")
+    doc.save(pdf_path)
+    doc.close()
+
+    db_path = os.path.join(tmp_dir, "test_transicao_impar.db")
+    db_conn = DatabaseConnection(db_path)
+    DatabaseSchemaManager(db_conn).initialize_database()
+
+    with db_conn.get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents (filename, filepath, title, hash, profile_type) VALUES (?, ?, ?, ?, ?)",
+            ("t2.pdf", pdf_path, "Teste2", "hash_transicao_impar", "PARAGRAPH_BOOK"),
+        )
+        doc_id = cur.lastrowid
+        conn.commit()
+
+    indexer = ParagraphIndexer(db_conn)
+    indexer.index_document(doc_id, pdf_path)
+
+    return db_conn, doc_id
+
+
+def test_chapter_opening_always_lands_on_odd_page_number():
+    db_conn, doc_id = _build_and_index_odd_last_confirmed()
+
+    with db_conn.get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT printed_page_label FROM pages WHERE document_id=? ORDER BY pdf_page_index",
+            (doc_id,),
+        )
+        labels = [r["printed_page_label"] for r in cur.fetchall()]
+
+    # "147" (real) -> 5x "147" (Notas, repete) -> "149" (abertura, pula o
+    # par "148") -> "150" (real). "148" nunca deve aparecer.
+    assert labels == ["147", "147", "147", "147", "147", "147", "149", "150"], (
+        f"Sequencia errada: {labels}"
+    )
+
+    engine = SearchEngine(db_conn)
+    results_149 = engine.search(document_id=doc_id, page_label="149")
+    assert len(results_149) == 1, "Busca pela pagina 149 (inferida, impar) nao retornou resultado"
+    assert "capitulo novo (impar)" in results_149[0].full_text
+
+    results_148 = engine.search(document_id=doc_id, page_label="148")
+    assert len(results_148) == 0, "Pagina '148' nao deveria existir (par, absorvida pela lacuna)"
+
+
 if __name__ == "__main__":
     test_page_number_is_inferred_across_unnumbered_chapter_opening()
     test_search_by_page_53_returns_chapter_opening_content()
     test_decorative_block_does_not_leak_into_previous_or_next_paragraph()
+    test_chapter_opening_always_lands_on_odd_page_number()
     print("OK: numeracao de pagina inferida corretamente na transicao de capitulo, sem vazamento decorativo.")
