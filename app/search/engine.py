@@ -185,7 +185,15 @@ class SearchEngine:
                                     "lines": [c["chunk_text"]],
                                 })
 
-                        content = "\n\n".join(" ".join(g["lines"]) for g in para_groups)
+                        # BUG real reportado pelo usuário (print de tela): esta
+                        # reconstrução por página tinha seu PRÓPRIO join ingênuo
+                        # (" ".join), separado do usado em paragraph_indexer.py
+                        # -- então mesmo depois de corrigir a hifenização de
+                        # quebra de linha na indexação, a busca por PÁGINA
+                        # continuava mostrando "es- trechó" em vez de
+                        # "estrechó", porque reconstrói o texto direto dos
+                        # chunks salvos por linha. Precisa do mesmo tratamento.
+                        content = "\n\n".join(BaseIndexer.join_text_parts(g["lines"]) for g in para_groups)
                         content_norm = BaseIndexer.normalize_text(content)
                         score = 100.0
 

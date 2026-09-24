@@ -252,7 +252,7 @@ class ParagraphIndexer(BaseIndexer):
         """Consolida o texto acumulado do parágrafo (todos os chunks, de
         todas as páginas por onde ele passou) e grava em paragraphs +
         fts_paragraphs."""
-        full_text = " ".join(text_parts).strip()
+        full_text = self.join_text_parts(text_parts)
         norm_text = self.normalize_text(full_text)
 
         cursor.execute("SELECT paragraph_number FROM paragraphs WHERE id = ?", (paragraph_id,))

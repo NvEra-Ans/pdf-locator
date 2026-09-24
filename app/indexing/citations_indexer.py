@@ -223,7 +223,7 @@ class CitationsIndexer(BaseIndexer):
         text_entries + fts_entries. full_text/normalized_text contêm só o corpo da
         citação (sem a linha de atribuição) — título/local/data ficam em colunas
         separadas, para a UI poder mostrar formatado como no livro."""
-        full_text = " ".join(text_parts).strip()
+        full_text = self.join_text_parts(text_parts)
         norm_text = self.normalize_text(full_text)
 
         cursor.execute("SELECT entry_number FROM text_entries WHERE id = ?", (entry_id,))
