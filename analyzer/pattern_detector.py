@@ -34,6 +34,17 @@ class PatternDetector:
     KNOWN_HEADER_TITLES = frozenset([
         "CITAS DEL MENSAJE DEL PROFETA",
         "WILLIAM MARRION BRANHAM",
+        # CONFIRMADO com PDF real do livro "La Revelación de Los Siete
+        # Sellos" (perfil Tipo A): entre capítulos existem páginas quase em
+        # branco com só a palavra "Notas" no topo (espaço pro leitor
+        # anotar). Sem reconhecer isso, essa palavra vazava pro corpo do
+        # último parágrafo aberto antes da página em branco -- mesma classe
+        # de bug do vazamento de cabeçalho já corrigido no Tipo B.
+        # RISCO CONHECIDO (não verificado): se em algum lugar do livro (Tipo
+        # A ou B) a palavra "Notas" aparecer sozinha numa linha real de
+        # corpo de texto (coincidência rara, mas não descartada), essa linha
+        # passaria a ser tratada como cabeçalho/rodapé por engano.
+        "NOTAS",
     ])
 
     # Marcador de "Parte A" / "Parte B" (ex.: livro de citações com um corpo
@@ -124,8 +135,44 @@ class PatternDetector:
         re.IGNORECASE
     )
 
+    # Início de parágrafo do perfil Tipo A ("Livro Estruturado por
+    # Parágrafos" -- ex.: livro de sermões numerados por parágrafo, sem
+    # linha de atribuição local/data). CONFIRMADO com PDF real do usuário
+    # (livro "La Revelación de Los Siete Sellos"): o separador aqui NÃO é
+    # traço como no livro de citações (Tipo B) -- é "N." seguido de um
+    # caractere de TABULAÇÃO de verdade (\t), não espaço comum. Ex. real:
+    # "13.\t Ahora, yo no sé..." E confirmado tambem que às vezes o número
+    # fica SOZINHO numa linha própria ("4.\t", sem nada depois) e o texto
+    # continua na linha seguinte -- por isso o padrão não exige nada depois
+    # da tabulação (o `\s*$` do fim NÃO é usado aqui, ancorado só no início,
+    # igual ao PARAGRAPH_PATTERN do Tipo B).
+    # Exigir especificamente TAB (não só espaço) depois do ponto é o que
+    # evita falso-positivo com frases comuns tipo "...en el año 1963. Des-
+    # pués..." que, se quebradas pelo PyMuPDF bem no início de uma linha,
+    # teriam "1963." seguido de espaço normal -- nunca de tab -- então não
+    # batem nesse padrão.
+    # BUG encontrado no meu proprio teste (antes de mandar pro usuario):
+    # quando o numero fica sozinho na linha ("4.\t", sem texto depois), o
+    # indexador ja chama `.strip()` no texto ANTES de checar o padrao --
+    # isso remove a tabulacao final, sobrando so "4." (sem tab nenhum). Um
+    # padrao que exige o tab sempre presente deixaria de reconhecer esse
+    # caso. Corrigido aceitando OU um tab de verdade depois do ponto, OU o
+    # ponto sendo o ultimo caractere da linha (ja sem nada depois, exata-
+    # mente o que sobra do "4.\t" apos o strip).
+    # RISCO CONHECIDO (não verificado): não testei o livro inteiro (só 89
+    # das 536 páginas confirmadas até agora). Não tenho como garantir que
+    # todo capítulo usa exatamente esse mesmo separador.
+    PARAGRAPH_PATTERN_TYPE_A = re.compile(r'^\s*(\d{1,4})\.(?:\t|\s*$)')
+
     @classmethod
-    def analyze_text_span(cls, text: str, bbox: List[float], page_width: float, page_height: float) -> Dict[str, Any]:
+    def analyze_text_span(
+        cls,
+        text: str,
+        bbox: List[float],
+        page_width: float,
+        page_height: float,
+        paragraph_pattern: "re.Pattern" = None,
+    ) -> Dict[str, Any]:
         result = {
             "is_page_number_candidate": False,
             "confidence_page_label": 0.0,
@@ -168,11 +215,17 @@ class PatternDetector:
             result["is_header_or_footer"] = True
             return result
 
-        # 3. Início de um extrato numerado (ex.: "44 - ..."), a menos que seja
-        # uma referência bíblica "capítulo:versículo" ou um número grande
-        # formatado com ponto de milhar (ex.: "300.000").
+        # 3. Início de um extrato/parágrafo numerado (ex.: "44 - ..." no Tipo
+        # B, ou "44.\t..." no Tipo A), a menos que seja uma referência bíblica
+        # "capítulo:versículo" ou um número grande formatado com ponto de
+        # milhar (ex.: "300.000"). `paragraph_pattern` deixa cada indexador
+        # escolher seu proprio padrao de separador (Tipo A e Tipo B usam
+        # convenções de numeração bem diferentes) sem um interferir no outro;
+        # por padrão (None) mantém o comportamento original do Tipo B, pra
+        # não mudar nada do que já estava funcionando.
+        active_paragraph_pattern = paragraph_pattern or cls.PARAGRAPH_PATTERN
         if not cls.VERSE_REFERENCE_PATTERN.match(clean_text) and not cls.THOUSANDS_NUMBER_PATTERN.match(clean_text):
-            para_match = cls.PARAGRAPH_PATTERN.match(clean_text)
+            para_match = active_paragraph_pattern.match(clean_text)
             if para_match:
                 result["is_paragraph_candidate"] = True
                 result["detected_paragraph_num"] = para_match.group(1)

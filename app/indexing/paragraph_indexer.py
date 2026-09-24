@@ -65,7 +65,31 @@ class ParagraphIndexer(BaseIndexer):
                         if not line_text:
                             continue
 
-                        res = PatternDetector.analyze_text_span(line_text, bbox, width, height)
+                        res = PatternDetector.analyze_text_span(
+                            line_text, bbox, width, height,
+                            paragraph_pattern=PatternDetector.PARAGRAPH_PATTERN_TYPE_A,
+                        )
+
+                        # Número de página solto, marcador de Parte A/B (nao
+                        # deveria aparecer nesse perfil, mas por seguranca) ou
+                        # cabecalho/rodape repetido do livro (titulo da obra,
+                        # titulo do capitulo, ou paginas quase em branco tipo
+                        # "Notas" entre capitulos): nao e conteudo de
+                        # paragrafo nenhum, nao deve acumular no corpo.
+                        #
+                        # BUG real encontrado com dado do usuario (livro "La
+                        # Revelacion de Los Siete Sellos", perfil Tipo A):
+                        # esse indexador nunca tratava is_header_or_footer
+                        # (nem is_page_number_candidate) -- toda linha que
+                        # nao fosse um novo paragrafo caia direto no corpo do
+                        # paragrafo aberto, entao o titulo do livro/capitulo
+                        # (repetido em toda pagina) e a palavra "Notas" (nas
+                        # paginas quase em branco entre capitulos) vazavam
+                        # pro paragrafo anterior. Corrigido com "continue",
+                        # igual ja acontece no indexador do Tipo B.
+                        if res["is_page_number_candidate"] or res["is_part_label_candidate"] or res["is_header_or_footer"]:
+                            continue
+
                         if res["is_paragraph_candidate"]:
                             # Salva parágrafo anterior
                             if current_para_num and current_para_text:
