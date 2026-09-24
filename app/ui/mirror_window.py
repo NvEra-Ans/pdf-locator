@@ -13,9 +13,10 @@ com o usuário:
     monitor 2 manualmente toda vez que abre) -- não salva posição
     entre sessões.
 """
+import html
+
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
 
 DEFAULT_FONT_SIZE = 32
 MIN_FONT_SIZE = 14
@@ -69,14 +70,26 @@ class MirrorWindow(QWidget):
     # ---------------------------------------------------------------- Fonte
 
     def _apply_font(self):
-        body_font = QFont()
-        body_font.setPointSize(self._font_size)
-        self.txt_body.setFont(body_font)
+        # BUG real encontrado pelo usuário: o tema do app tem uma regra
+        # global "QWidget { font-size: 13px; }" (app/ui/theme.py) que
+        # compete com o tamanho de fonte definido programaticamente via
+        # QFont/setFont() nestes widgets -- resultado: o tamanho ficava
+        # "preso" no valor do tema até o primeiro clique em "A+", que então
+        # sobrescrevia de uma vez (salto visível), enquanto cliques
+        # seguintes (inclusive "A-") pareciam normais porque a disputa já
+        # tinha sido resolvida. Confirmado reproduzindo com o tema real
+        # aplicado: font().pointSize() ficava em -1 (tamanho em pixels
+        # herdado do tema) até a primeira chamada de setFont() "vencer".
+        #
+        # Corrigido aplicando o tamanho via CSS local do próprio widget
+        # (setStyleSheet), que tem prioridade sobre a regra global do tema
+        # -- em vez de brigar com o QSS usando QFont, usamos QSS pra
+        # sobrescrever QSS. Efeito: cada clique em A+/A- muda o tamanho de
+        # forma consistente e imediata, desde o primeiro clique.
+        self.txt_body.setStyleSheet(f"QTextEdit#MirrorBodyText {{ font-size: {self._font_size}pt; }}")
 
-        ref_font = QFont()
-        ref_font.setPointSize(max(12, self._font_size // 2))
-        ref_font.setBold(True)
-        self.lbl_ref.setFont(ref_font)
+        ref_size = max(12, self._font_size // 2)
+        self.lbl_ref.setStyleSheet(f"QLabel#MirrorRefLabel {{ font-size: {ref_size}pt; font-weight: 700; }}")
 
     def _increase_font(self):
         self._font_size = min(MAX_FONT_SIZE, self._font_size + FONT_STEP)
@@ -93,4 +106,21 @@ class MirrorWindow(QWidget):
         selecionado/exibido -- atualiza esta janela automaticamente,
         sem nenhuma ação do lado de quem está olhando o monitor 2."""
         self.lbl_ref.setText(reference)
-        self.txt_body.setPlainText(text)
+
+        # Texto justificado (pedido do usuário, pra ficar mais
+        # apresentável/parecido com o livro impresso) -- precisa ser HTML
+        # com um <p> por parágrafo, e não um único bloco, porque assim a
+        # última linha de cada parágrafo continua alinhada à esquerda em
+        # vez de esticada (comportamento padrão de justificação
+        # tipográfica). setPlainText não permite controlar alinhamento por
+        # parágrafo de forma confiável, por isso trocamos pra setHtml.
+        # Nota: "text-align: justify" via atributo style NÃO funciona no
+        # mecanismo de rich text do Qt (testado e confirmado -- o
+        # alinhamento fica ignorado); precisa do atributo HTML
+        # align="justify" separado do style.
+        paragraphs = text.split("\n\n")
+        html_paragraphs = "".join(
+            f'<p align="justify">{html.escape(p).replace(chr(10), "<br>")}</p>'
+            for p in paragraphs
+        )
+        self.txt_body.setHtml(html_paragraphs)

@@ -166,6 +166,14 @@ class MainWindow(QMainWindow):
         search_box.addWidget(self.lbl_page)
         search_box.addWidget(self.txt_page)
 
+        # PEDIDO REAL do usuário: completar a ideia do botão de página com
+        # um botão de voltar também (espelha "Próxima Página", pulando
+        # páginas "buraco" sem conteúdo -- ver
+        # SearchEngine.get_previous_page_with_content).
+        self.btn_prev_page = QPushButton("◀ Página Anterior")
+        self.btn_prev_page.clicked.connect(self._go_to_previous_page)
+        search_box.addWidget(self.btn_prev_page)
+
         # PEDIDO REAL do usuário: botão pra avançar pra próxima página com
         # conteúdo sem precisar digitar o número manualmente -- útil pra
         # leitura contínua. Pula páginas "buraco" sem conteúdo (ver
@@ -497,33 +505,47 @@ class MainWindow(QMainWindow):
         self.btn_search.setText("Pesquisar")
 
     def _go_to_next_page(self):
+        self._go_to_adjacent_page(direction="next")
+
+    def _go_to_previous_page(self):
+        self._go_to_adjacent_page(direction="previous")
+
+    def _go_to_adjacent_page(self, direction: str):
         idx = self.combo_docs.currentIndex()
         if idx < 0:
             return
         doc_id = self.combo_docs.itemData(idx)["id"]
 
+        label = "Próxima Página" if direction == "next" else "Página Anterior"
+        verbo = "avançar" if direction == "next" else "voltar"
+        preposicao = "depois" if direction == "next" else "antes"
+
         current_page = self.txt_page.text().strip()
         if not current_page:
             QMessageBox.information(
-                self, "Próxima Página",
-                "Digite ou pesquise uma página primeiro, pra eu saber de onde avançar."
+                self, label,
+                f"Digite ou pesquise uma página primeiro, pra eu saber de onde {verbo}."
             )
             return
 
-        next_page = self.search_engine.get_next_page_with_content(doc_id, current_page)
-        if not next_page:
+        if direction == "next":
+            target_page = self.search_engine.get_next_page_with_content(doc_id, current_page)
+        else:
+            target_page = self.search_engine.get_previous_page_with_content(doc_id, current_page)
+
+        if not target_page:
             QMessageBox.information(
-                self, "Próxima Página",
-                f"Não encontrei nenhuma página com conteúdo depois da \"{current_page}\" "
-                "(pode ser o fim do documento, ou a página atual tem um rótulo que não é "
+                self, label,
+                f"Não encontrei nenhuma página com conteúdo {preposicao} da \"{current_page}\" "
+                "(pode ser o início/fim do documento, ou a página atual tem um rótulo que não é "
                 "puramente numérico)."
             )
             return
 
-        # Avança estritamente por página -- limpa parágrafo/extrato/texto
-        # pra não filtrar a página nova por um número que só fazia sentido
-        # na página anterior.
-        self.txt_page.setText(next_page)
+        # Avança/volta estritamente por página -- limpa parágrafo/extrato/
+        # texto pra não filtrar a página nova por um número que só fazia
+        # sentido na página anterior.
+        self.txt_page.setText(target_page)
         self.txt_para.clear()
         self.txt_entry.clear()
         self.txt_text.clear()
@@ -548,7 +570,10 @@ class MainWindow(QMainWindow):
             f'<span style="background-color:#F3E7C3; color:#6B5514; border-radius:10px; '
             f'padding:2px 8px; font-weight:600; font-size:12px;">'
             f'{num_kind} {html.escape(str(num_label))} · Página {html.escape(res.printed_page_label)}</span>',
-            f'<p style="font-size:16px; line-height:160%; margin-top:12px;">{safe_text}</p>',
+            # Nota: o mecanismo de rich text do Qt não aplica "text-align:
+            # justify" vindo do atributo style (testado e confirmado) --
+            # precisa do atributo HTML align="justify" separado.
+            f'<p align="justify" style="font-size:16px; line-height:160%; margin-top:12px;">{safe_text}</p>',
         ]
 
         # Referência da citação (título em negrito + local/data), do mesmo jeito

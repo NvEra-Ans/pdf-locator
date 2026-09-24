@@ -26,6 +26,19 @@ class SearchEngine:
         citações) não têm uma noção clara de "próximo" e retornam None --
         o chamador deve desabilitar o botão nesse caso.
         """
+        return self._get_adjacent_page_with_content(document_id, current_page_label, direction="next")
+
+    def get_previous_page_with_content(self, document_id: int, current_page_label: str) -> Optional[str]:
+        """Espelho de get_next_page_with_content, pra trás -- mesmo pedido
+        real do usuário ("completar a ideia" do botão de página com um
+        botão de voltar também). Mesma regra: pula buracos sem conteúdo
+        (indo pra página anterior com texto de verdade), e só funciona com
+        rótulo de página puramente numérico."""
+        return self._get_adjacent_page_with_content(document_id, current_page_label, direction="previous")
+
+    def _get_adjacent_page_with_content(
+        self, document_id: int, current_page_label: str, direction: str
+    ) -> Optional[str]:
         if not current_page_label or not current_page_label.isdigit():
             return None
         current_num = int(current_page_label)
@@ -43,6 +56,9 @@ class SearchEngine:
             else:
                 chunk_table = "entry_chunks"
 
+            comparator = ">" if direction == "next" else "<"
+            order = "ASC" if direction == "next" else "DESC"
+
             # GLOB '[0-9]*' + NOT GLOB '*[^0-9]*' = string inteira só com
             # dígitos (equivalente a um .isdigit() em SQL puro), pra não
             # quebrar o CAST em páginas com rótulo alfanumérico.
@@ -53,9 +69,9 @@ class SearchEngine:
                 WHERE pg.document_id = ?
                   AND pg.printed_page_label GLOB '[0-9]*'
                   AND pg.printed_page_label NOT GLOB '*[^0-9]*'
-                  AND CAST(pg.printed_page_label AS INTEGER) > ?
+                  AND CAST(pg.printed_page_label AS INTEGER) {comparator} ?
                   AND EXISTS (SELECT 1 FROM {chunk_table} c WHERE c.page_id = pg.id)
-                ORDER BY CAST(pg.printed_page_label AS INTEGER) ASC
+                ORDER BY CAST(pg.printed_page_label AS INTEGER) {order}
                 LIMIT 1
                 """,
                 (document_id, current_num)

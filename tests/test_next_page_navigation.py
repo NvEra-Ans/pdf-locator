@@ -85,7 +85,31 @@ def test_next_page_returns_none_for_non_numeric_label():
     assert engine.get_next_page_with_content(doc_id, "") is None
 
 
+def test_previous_page_skips_gap_without_content():
+    """Espelho do teste de proxima pagina -- pedido real do usuario de
+    completar a ideia com um botao de voltar."""
+    db_conn, doc_id = _build_and_index()
+    engine = SearchEngine(db_conn)
+
+    # 150 -> deveria voltar direto pra 149 (pulando o buraco "148" que
+    # nunca existe, igual no sentido de avancar).
+    assert engine.get_previous_page_with_content(doc_id, "150") == "149"
+    # 149 -> 147 normalmente.
+    assert engine.get_previous_page_with_content(doc_id, "149") == "147"
+    # 147 -> inicio do documento, nao tem anterior.
+    assert engine.get_previous_page_with_content(doc_id, "147") is None
+
+
+def test_previous_page_returns_none_for_non_numeric_label():
+    db_conn, doc_id = _build_and_index()
+    engine = SearchEngine(db_conn)
+    assert engine.get_previous_page_with_content(doc_id, "14A") is None
+    assert engine.get_previous_page_with_content(doc_id, "") is None
+
+
 if __name__ == "__main__":
     test_next_page_skips_gap_without_content()
     test_next_page_returns_none_for_non_numeric_label()
-    print("OK: botao de proxima pagina pula buracos sem conteudo corretamente.")
+    test_previous_page_skips_gap_without_content()
+    test_previous_page_returns_none_for_non_numeric_label()
+    print("OK: botoes de proxima/anterior pulam buracos sem conteudo corretamente.")
