@@ -15,6 +15,16 @@ from app.paths import get_db_path
 
 def main():
     app = QApplication(sys.argv)
+    # BUG real reportado pelo usuário (print de tela): a caixa de seleção de
+    # documento (QComboBox) aparecia com uma borda amarela grossa e cantos
+    # cortados/quadrados em vez do arredondado definido no tema -- causa
+    # raiz: sem um estilo base explícito, o Qt usa o estilo nativo do Windows
+    # ("windowsvista"), que desenha sua própria moldura/foco por cima da
+    # QSS customizada (border-radius, border-color) em vez de deixar a QSS
+    # controlar sozinha. É um conflito conhecido do Qt entre estilo nativo e
+    # style sheets -- a correção recomendada pela própria documentação do Qt
+    # é usar o estilo "Fusion", que é 100% desenhado pela QSS.
+    app.setStyle("Fusion")
     app.setApplicationName(APP_NAME_SHORT)
     app.setApplicationVersion(APP_VERSION)
 

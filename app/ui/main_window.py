@@ -104,6 +104,13 @@ class MainWindow(QMainWindow):
 
         logo_path = os.path.join(ASSETS_DIR, "logo.png")
         logo_label = QLabel()
+        # BUG real reportado pelo usuário (print de tela): sem objectName, este
+        # QLabel só casa com a regra genérica "QWidget" do tema (fundo cinza
+        # #F5F6F8), não com o branco do #HeaderBar -- resultado: uma caixinha
+        # cinza visível ao redor da logo, destoando do resto do cabeçalho.
+        # Fundo transparente local resolve, sem precisar duplicar regra no
+        # tema claro E escuro.
+        logo_label.setStyleSheet("background: transparent;")
         if os.path.exists(logo_path):
             pix = QPixmap(logo_path).scaledToHeight(40, Qt.SmoothTransformation)
             logo_label.setPixmap(pix)
