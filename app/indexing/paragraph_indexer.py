@@ -33,6 +33,32 @@ class ParagraphIndexer(BaseIndexer):
             current_bbox = None
             printed_label = "1"
 
+            # BUG real encontrado com dado do usuario (livro "La Revelacion de
+            # Los Siete Sellos"): paginas de "Notas" em branco (inseridas nesta
+            # edicao "expandida com Notas" para anotacao, sem numero impresso)
+            # e a pagina de abertura de cada capitulo novo (que tambem nao
+            # imprime numero, por convencao tipografica comum -- o cabecalho
+            # corrido some justo na pagina de abertura) nao tem NENHUM numero
+            # de pagina no PDF. O fallback antigo usava o indice bruto do PDF
+            # (page_idx + 1), que diverge totalmente da numeracao real do
+            # livro assim que aparece uma dessas paginas sem numero -- ex.:
+            # real "...52" seguido de 4 paginas "Notas" + 1 pagina de abertura
+            # de capitulo, e so entao "54" -- o fallback antigo rotulava essas
+            # 5 paginas como "59,60,61,62,63", fazendo a pagina real "53"
+            # nunca existir no banco (busca por ela nao achava nada).
+            #
+            # Corrigido com base no padrao confirmado nos dados reais: a
+            # numeracao so avanca 1 numero no total nesse intervalo (52->53->
+            # 54), nao 5. Entao: pagina sem numero E sem nenhum paragrafo
+            # numerado (ex.: "Notas" em branco) repete o ultimo numero
+            # confirmado (nao consome numero -- e conteudo extra desta
+            # edicao, nao faz parte da paginacao original). Pagina sem numero
+            # MAS com paragrafos numerados (ex.: pagina de abertura de
+            # capitulo, que tem "1.", "2." etc.) recebe ultimo_confirmado + 1
+            # (continua a sequencia -- convencao de que a pagina de abertura
+            # ocupa um numero mesmo sem imprimi-lo).
+            last_confirmed_page_num = None
+
             for page_idx in range(len(doc)):
                 page = doc[page_idx]
                 width, height = page.rect.width, page.rect.height
@@ -51,6 +77,43 @@ class ParagraphIndexer(BaseIndexer):
                             if res["is_page_number_candidate"] and res["confidence_page_label"] > page_conf:
                                 printed_label = res["detected_label"]
                                 page_conf = res["confidence_page_label"]
+
+                # Marca se esta página NÃO tinha número impresso detectável --
+                # só páginas assim (divisórias de capítulo, capa) têm o risco
+                # do vazamento de texto decorativo tratado no passo 2 abaixo.
+                # Uma página de conteúdo normal (número real detectado) nunca
+                # tem esse bloco decorativo, então não precisa dessa checagem.
+                page_number_was_inferred = not (page_conf > 0.90)
+
+                if page_conf > 0.90:
+                    # Número detectado com confiança real -- essa é a âncora
+                    # confiável pra continuar a sequência nas próximas páginas
+                    # sem número.
+                    if printed_label.isdigit():
+                        last_confirmed_page_num = int(printed_label)
+                elif last_confirmed_page_num is not None:
+                    # Nenhum número detectado nesta página: decide o fallback
+                    # verificando se há pelo menos uma linha de parágrafo
+                    # numerado (ex.: "1.\t...") em algum lugar da página --
+                    # só uma página de conteúdo real (abertura de capítulo)
+                    # avança a sequência; uma página "Notas" em branco repete
+                    # o último número confirmado.
+                    has_paragraph_content = False
+                    for b in raw_blocks:
+                        if b.get("type") != 0:
+                            continue
+                        for line in b.get("lines", []):
+                            line_text = "".join([s.get("text", "") for s in line.get("spans", [])]).strip()
+                            if line_text and PatternDetector.PARAGRAPH_PATTERN_TYPE_A.match(line_text):
+                                has_paragraph_content = True
+                                break
+                        if has_paragraph_content:
+                            break
+
+                    if has_paragraph_content:
+                        last_confirmed_page_num += 1
+                    printed_label = str(last_confirmed_page_num)
+                    page_conf = 0.85  # marca como inferido (menor que detecção real, mas acima do fallback bruto antigo)
 
                 cursor.execute(
                     "INSERT INTO pages (document_id, pdf_page_index, printed_page_label, confidence) VALUES (?, ?, ?, ?)",
@@ -71,12 +134,37 @@ class ParagraphIndexer(BaseIndexer):
                 # inteiro concatenado faz esse número cair no meio da string e
                 # nunca bater no padrão (ancorado no início), fundindo os dois
                 # parágrafos em um só.
+                # BUG real encontrado com dado do usuario: pagina de abertura
+                # de capitulo (ex.: "LA BRECHA...") traz, entre o titulo (todo
+                # maiusculo, ja filtrado acima) e o primeiro paragrafo "1.",
+                # um bloco decorativo -- data, local, epigrafe/hino -- que NAO
+                # e todo maiusculo, entao escapava do filtro de cabecalho e
+                # era colado no final do ULTIMO paragrafo do capitulo
+                # ANTERIOR (que ainda estava "aberto", esperando mais texto).
+                # Esse bloco e sempre CENTRALIZADO e mais ESTREITO que o
+                # corpo do texto (que ocupa quase a largura toda da pagina) --
+                # diferente de uma citacao biblica centralizada DENTRO de um
+                # paragrafo (ex.: "Marcos 11:23-24"), que so acontece DEPOIS
+                # que um paragrafo numerado ja comecou naquela pagina. Por
+                # isso so filtramos bloco centralizado/estreito quando: (a) a
+                # pagina nao tinha numero impresso (unico caso onde esse bloco
+                # decorativo aparece) E (b) ainda nao vimos nenhum "N." comecar
+                # nesta pagina.
+                seen_paragraph_start_this_page = False
+
                 for b in blocks:
                     bbox = b.get("bbox")
                     for line in b.get("lines", []):
                         line_text = "".join([s.get("text", "") for s in line.get("spans", [])]).strip()
                         if not line_text:
                             continue
+
+                        if page_number_was_inferred and not seen_paragraph_start_this_page and bbox:
+                            block_width = bbox[2] - bbox[0]
+                            block_center = (bbox[0] + bbox[2]) / 2.0
+                            page_center = width / 2.0
+                            if block_width < 0.55 * width and abs(block_center - page_center) < 0.08 * width:
+                                continue
 
                         res = PatternDetector.analyze_text_span(
                             line_text, bbox, width, height,
@@ -91,6 +179,9 @@ class ParagraphIndexer(BaseIndexer):
                         # paragrafo nenhum, nao deve acumular no corpo.
                         if res["is_page_number_candidate"] or res["is_part_label_candidate"] or res["is_header_or_footer"]:
                             continue
+
+                        if res["is_paragraph_candidate"]:
+                            seen_paragraph_start_this_page = True
 
                         # Ainda não há parágrafo ativo (ex.: texto de capa/
                         # introdução antes do primeiro "N." do livro): abre
