@@ -331,6 +331,28 @@ class MainWindow(QMainWindow):
             self.lbl_entry.setVisible(True)
             self.txt_entry.setVisible(True)
 
+        # BUG real reportado pelo usuário (print de tela): trocar de
+        # documento só escondia/mostrava os campos Parágrafo/Extrato, mas
+        # NUNCA limpava o que estava digitado neles -- então um número de
+        # página deixado de uma busca no livro anterior (ex.: "250" no
+        # Livro dos Selos) continuava lá, escondido, e filtrava junto com
+        # o extrato digitado no livro novo (ex.: "251" no Livro de
+        # Citações). Como os dois números quase nunca coincidem na mesma
+        # página física de livros diferentes, a busca combinada não
+        # achava nada -- só voltava a funcionar depois de apagar
+        # manualmente o campo Página. Corrigido limpando todos os campos
+        # de busca (e os resultados da busca anterior, que também não
+        # fazem mais sentido pra um documento diferente) sempre que o
+        # documento selecionado muda.
+        self.txt_page.clear()
+        self.txt_para.clear()
+        self.txt_entry.clear()
+        self.txt_text.clear()
+        self.table.setRowCount(0)
+        self.current_results = []
+        self.txt_detail.clear()
+        self.lbl_detail_header.setText("Nenhum resultado encontrado")
+
     def _import_pdf(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Selecionar PDF", "", "Arquivos PDF (*.pdf)")
         if not file_path:
