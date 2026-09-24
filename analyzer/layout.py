@@ -61,12 +61,48 @@ def order_blocks_reading_order(
 
     header.sort(key=lambda b: (b["bbox"][1], b["bbox"][0]))
     footer.sort(key=lambda b: (b["bbox"][1], b["bbox"][0]))
-    body_ordered = _order_body_by_columns(body, page_width)
+    body_ordered = _order_body_by_columns(body, page_width, page_height)
 
     return header + body_ordered + footer
 
 
-def _order_body_by_columns(body: List[Dict[str, Any]], page_width: float) -> List[Dict[str, Any]]:
+def _side_is_a_real_column(blocks: List[Dict[str, Any]], page_height: float) -> bool:
+    """Decide se um lado (esquerda ou direita) tem conteúdo suficiente pra ser
+    considerado uma coluna de verdade.
+
+    BUG real encontrado com dado do usuario: a regra antiga exigia PELO MENOS
+    2 blocos de cada lado pra tratar a pagina como "2 colunas". Isso parte do
+    pressuposto de que uma coluna inteira sempre vem fatiada em varios blocos
+    pelo PyMuPDF -- mas isso NAO e garantido. No extrato real 87 da Parte B
+    (pagina impressa "10-B"), a coluna direita inteira (59 linhas, do topo ate
+    quase o rodape da pagina) saiu do PyMuPDF como UM UNICO bloco, porque o
+    paragrafo nao tinha nenhuma quebra interna. Com a regra antiga, "right >= 2"
+    dava False, a pagina inteira caia no fallback de ordenar so por Y (coluna
+    unica), e esse bloco gigante -- que comeca no TOPO da pagina -- ficava
+    ordenado ANTES de todo o texto da coluna esquerda, inclusive antes do "87 -"
+    que abre o extrato. Resultado: o paragrafo inteiro da coluna direita era
+    processado antes do extrato 87 existir e ia parar dentro da entrada
+    ANTERIOR (a que estava ativa naquele ponto) -- sumindo por completo do
+    extrato 87-B na busca.
+    Corrigido aceitando um lado com um UNICO bloco como coluna valida, desde
+    que esse bloco seja "alto" o bastante (>= 25% da altura da pagina) pra ser,
+    de fato, uma coluna inteira -- e nao um bloco pequeno perdido do lado
+    errado (que e exatamente o caso que a regra de 2+ blocos queria evitar).
+    RISCO CONHECIDO (nao verificado): esse limiar de 25% e uma estimativa
+    baseada só neste caso real confirmado; não tenho como garantir que ele
+    cobre todo layout possível do livro sem rodar contra o livro inteiro.
+    """
+    if len(blocks) >= 2:
+        return True
+    if len(blocks) == 1:
+        block_height = blocks[0]["bbox"][3] - blocks[0]["bbox"][1]
+        return block_height >= page_height * 0.25
+    return False
+
+
+def _order_body_by_columns(
+    body: List[Dict[str, Any]], page_width: float, page_height: float
+) -> List[Dict[str, Any]]:
     if len(body) <= 1:
         return body
 
@@ -87,7 +123,11 @@ def _order_body_by_columns(body: List[Dict[str, Any]], page_width: float) -> Lis
     # blocos ambíguos (que cruzam o meio) não forem a maioria — senão é mais seguro
     # assumir coluna única e não arriscar reordenar errado.
     total = len(body)
-    is_two_column = len(left) >= 2 and len(right) >= 2 and len(ambiguous) < total * 0.4
+    is_two_column = (
+        _side_is_a_real_column(left, page_height)
+        and _side_is_a_real_column(right, page_height)
+        and len(ambiguous) < total * 0.4
+    )
 
     if not is_two_column:
         # Fallback: coluna única, ordena por posição vertical (comportamento original)
