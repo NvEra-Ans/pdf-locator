@@ -38,50 +38,129 @@ class SearchEngine:
 
             # 1. Pesquisa no Perfil PARAGRAPH_BOOK (Tipo A)
             if profile.profile_type == ProfileType.PARAGRAPH_BOOK:
-                query = """
-                SELECT d.id as doc_id, d.title, pg.pdf_page_index, pg.printed_page_label,
-                       p.paragraph_number, p.text, p.normalized_text
-                FROM paragraphs p
-                JOIN pages pg ON p.page_id = pg.id
-                JOIN documents d ON pg.document_id = d.id
-                WHERE d.id = ?
-                """
-                params = [document_id]
-
+                # PEDIDO REAL do usuario: nesse perfil (livro tipo "Los Siete
+                # Sellos", sermao dividido em paragrafos numerados dentro da
+                # pagina) a consulta normal e por PAGINA, nao por paragrafo
+                # isolado -- diferente do livro de citacoes, onde cada
+                # extrato e uma unidade fechada por si so. Buscar so pela
+                # pagina devolvia um resultado SEPARADO por paragrafo (ex.:
+                # pagina 10 com paragrafos 32 e 33 apareciam como 2 linhas),
+                # obrigando a pessoa a clicar em cada um pra reconstruir o
+                # texto da pagina inteira -- o que o livro real (uma pagina
+                # continua, com varios paragrafos numerados em sequencia)
+                # nao pede.
+                #
+                # Corrigido: quando a pesquisa informa uma PAGINA, o
+                # resultado passa a ser UM registro por pagina, com o texto
+                # de TODOS os paragrafos daquela pagina concatenados na
+                # ordem em que aparecem (mesma ordem de insercao/leitura),
+                # igual a pagina fisica do livro. Buscar so por parágrafo
+                # (sem pagina) continua devolvendo um resultado por
+                # parágrafo, ja que nesse caso o objetivo e achar aquele
+                # número específico em qualquer capítulo do livro (a
+                # numeração reinicia por capítulo, ver PatternDetector).
                 if page_label:
-                    query += " AND pg.printed_page_label = ?"
-                    params.append(page_label)
-                if paragraph_num and profile.supports_paragraph_search:
-                    query += " AND p.paragraph_number = ?"
-                    params.append(paragraph_num)
+                    query = """
+                    SELECT d.id as doc_id, d.title, pg.id as page_db_id,
+                           pg.pdf_page_index, pg.printed_page_label
+                    FROM pages pg
+                    JOIN documents d ON pg.document_id = d.id
+                    WHERE d.id = ? AND pg.printed_page_label = ?
+                    """
+                    params = [document_id, page_label]
+                    if paragraph_num and profile.supports_paragraph_search:
+                        query += """ AND EXISTS (
+                            SELECT 1 FROM paragraphs p2
+                            WHERE p2.page_id = pg.id AND p2.paragraph_number = ?
+                        )"""
+                        params.append(paragraph_num)
 
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
+                    cursor.execute(query, params)
+                    page_rows = cursor.fetchall()
 
-                for r in rows:
-                    content = r["text"]
-                    content_norm = r["normalized_text"]
-                    score = 100.0
+                    for pr in page_rows:
+                        cursor.execute(
+                            "SELECT paragraph_number, text, normalized_text FROM paragraphs "
+                            "WHERE page_id = ? ORDER BY id",
+                            (pr["page_db_id"],)
+                        )
+                        para_rows = cursor.fetchall()
+                        if not para_rows:
+                            continue
 
-                    if norm_text:
-                        if use_fuzzy:
-                            score = fuzz.partial_ratio(norm_text, content_norm)
-                            if score < fuzzy_threshold:
-                                continue
-                        else:
-                            if norm_text not in content_norm:
-                                continue
+                        content = "\n\n".join(p["text"] for p in para_rows)
+                        content_norm = " ".join(p["normalized_text"] for p in para_rows)
+                        score = 100.0
 
-                    results.append(SearchResult(
-                        document_id=r["doc_id"],
-                        document_title=r["title"],
-                        pdf_page_index=r["pdf_page_index"],
-                        printed_page_label=r["printed_page_label"],
-                        paragraph_number=r["paragraph_number"],
-                        text_snippet=content[:150] + "...",
-                        full_text=content,
-                        match_score=score
-                    ))
+                        if norm_text:
+                            if use_fuzzy:
+                                score = fuzz.partial_ratio(norm_text, content_norm)
+                                if score < fuzzy_threshold:
+                                    continue
+                            else:
+                                if norm_text not in content_norm:
+                                    continue
+
+                        first_num = para_rows[0]["paragraph_number"]
+                        last_num = para_rows[-1]["paragraph_number"]
+                        range_label = first_num if first_num == last_num else f"{first_num}-{last_num}"
+
+                        results.append(SearchResult(
+                            document_id=pr["doc_id"],
+                            document_title=pr["title"],
+                            pdf_page_index=pr["pdf_page_index"],
+                            printed_page_label=pr["printed_page_label"],
+                            paragraph_number=range_label,
+                            text_snippet=content[:150] + "...",
+                            full_text=content,
+                            match_score=score
+                        ))
+
+                else:
+                    # Sem pagina informada: busca por paragrafo (ou texto)
+                    # em qualquer lugar do documento -- mantem 1 resultado
+                    # por paragrafo, como antes.
+                    query = """
+                    SELECT d.id as doc_id, d.title, pg.pdf_page_index, pg.printed_page_label,
+                           p.paragraph_number, p.text, p.normalized_text
+                    FROM paragraphs p
+                    JOIN pages pg ON p.page_id = pg.id
+                    JOIN documents d ON pg.document_id = d.id
+                    WHERE d.id = ?
+                    """
+                    params = [document_id]
+
+                    if paragraph_num and profile.supports_paragraph_search:
+                        query += " AND p.paragraph_number = ?"
+                        params.append(paragraph_num)
+
+                    cursor.execute(query, params)
+                    rows = cursor.fetchall()
+
+                    for r in rows:
+                        content = r["text"]
+                        content_norm = r["normalized_text"]
+                        score = 100.0
+
+                        if norm_text:
+                            if use_fuzzy:
+                                score = fuzz.partial_ratio(norm_text, content_norm)
+                                if score < fuzzy_threshold:
+                                    continue
+                            else:
+                                if norm_text not in content_norm:
+                                    continue
+
+                        results.append(SearchResult(
+                            document_id=r["doc_id"],
+                            document_title=r["title"],
+                            pdf_page_index=r["pdf_page_index"],
+                            printed_page_label=r["printed_page_label"],
+                            paragraph_number=r["paragraph_number"],
+                            text_snippet=content[:150] + "...",
+                            full_text=content,
+                            match_score=score
+                        ))
 
             # 2. Pesquisa no Perfil CITATIONS_BOOK (Tipo B)
             elif profile.profile_type == ProfileType.CITATIONS_BOOK:
