@@ -11,6 +11,33 @@ class ParagraphIndexer(BaseIndexer):
     def __init__(self, db_conn: DatabaseConnection):
         self.db_conn = db_conn
 
+    @staticmethod
+    def _line_font_size(line: dict) -> float:
+        """Tamanho de fonte "representativo" de uma linha -- média ponderada
+        por quantidade de caracteres de cada span, não o tamanho MÁXIMO.
+
+        BUG real encontrado com PDF de amostra do usuario (livro "Las
+        Edades"): esses sermões usam negrito num trecho CURTO da linha pra
+        marcar ênfase vocal/gagueira (ex.: "un—un Dodge", onde só o "-un "
+        vem maior, ~12.7pt, dentro de uma linha cujo resto é corpo normal,
+        ~10.3-10.9pt). Usando o tamanho MÁXIMO da linha pra decidir se ela é
+        um bloco decorativo (título/autor/data), essa única palavra em
+        negrito fazia a LINHA INTEIRA ser tratada como decorativa e
+        descartada -- sumindo com uma frase real de conteúdo. A média
+        ponderada por caracteres não se deixa dominar por um trecho curto
+        em destaque, só por uma linha que é REALMENTE toda maior (caso
+        real de título/autor/data, ou letra capitular sozinha)."""
+        total_chars = 0
+        weighted_sum = 0.0
+        for span in line.get("spans", []):
+            text = span.get("text", "")
+            size = span.get("size", 0) or 0
+            if not text or not size:
+                continue
+            total_chars += len(text)
+            weighted_sum += size * len(text)
+        return weighted_sum / total_chars if total_chars else 0.0
+
     def index_document(self, doc_id: int, pdf_path: str) -> bool:
         doc = fitz.open(pdf_path)
         with self.db_conn.get_connection() as conn:
@@ -33,50 +60,18 @@ class ParagraphIndexer(BaseIndexer):
             current_bbox = None
             printed_label = "1"
 
-            # BUG real encontrado com dado do usuario (livro "La Revelacion de
-            # Los Siete Sellos"): paginas de "Notas" em branco (inseridas nesta
-            # edicao "expandida com Notas" para anotacao, sem numero impresso)
-            # e a pagina de abertura de cada capitulo novo (que tambem nao
-            # imprime numero, por convencao tipografica comum -- o cabecalho
-            # corrido some justo na pagina de abertura) nao tem NENHUM numero
-            # de pagina no PDF. O fallback antigo usava o indice bruto do PDF
-            # (page_idx + 1), que diverge totalmente da numeracao real do
-            # livro assim que aparece uma dessas paginas sem numero -- ex.:
-            # real "...52" seguido de 4 paginas "Notas" + 1 pagina de abertura
-            # de capitulo, e so entao "54" -- o fallback antigo rotulava essas
-            # 5 paginas como "59,60,61,62,63", fazendo a pagina real "53"
-            # nunca existir no banco (busca por ela nao achava nada).
-            #
-            # Corrigido com base no padrao confirmado nos dados reais: a
-            # numeracao so avanca 1 numero no total nesse intervalo (52->53->
-            # 54), nao 5. Entao: pagina sem numero E sem nenhum paragrafo
-            # numerado (ex.: "Notas" em branco) repete o ultimo numero
-            # confirmado (nao consome numero -- e conteudo extra desta
-            # edicao, nao faz parte da paginacao original). Pagina sem numero
-            # MAS com paragrafos numerados (ex.: pagina de abertura de
-            # capitulo, que tem "1.", "2." etc.) recebe ultimo_confirmado + 1
-            # (continua a sequencia -- convencao de que a pagina de abertura
-            # ocupa um numero mesmo sem imprimi-lo).
-            last_confirmed_page_num = None
+            # Letra capitular decorativa pendente (ver mais abaixo) -- fica
+            # em espera aqui até a próxima linha real de texto, pra ser
+            # colada SEM espaço nela (ex.: "M" + "uy asombrado" -> "Muy
+            # asombrado", não "M uy asombrado").
+            pending_dropcap_prefix = ""
+
+            final_labels, final_confs, raw_blocks_cache, body_font_size = self._resolve_page_labels(doc)
 
             for page_idx in range(len(doc)):
-                page = doc[page_idx]
-                width, height = page.rect.width, page.rect.height
-                page_dict = page.get_text("dict")
-                raw_blocks = page_dict.get("blocks", [])
-
-                printed_label = str(page_idx + 1)
-                page_conf = 0.90
-
-                # 1. Tenta identificar o rótulo de página impresso no cabeçalho/rodapé
-                for b in raw_blocks:
-                    if b.get("type") == 0:
-                        for line in b.get("lines", []):
-                            line_text = "".join([s.get("text", "") for s in line.get("spans", [])]).strip()
-                            res = PatternDetector.analyze_text_span(line_text, b.get("bbox", [0, 0, 0, 0]), width, height)
-                            if res["is_page_number_candidate"] and res["confidence_page_label"] > page_conf:
-                                printed_label = res["detected_label"]
-                                page_conf = res["confidence_page_label"]
+                raw_blocks, width, height = raw_blocks_cache[page_idx]
+                printed_label = final_labels[page_idx]
+                page_conf = final_confs[page_idx]
 
                 # Marca se esta página NÃO tinha número impresso detectável --
                 # só páginas assim (divisórias de capítulo, capa) têm o risco
@@ -84,51 +79,6 @@ class ParagraphIndexer(BaseIndexer):
                 # Uma página de conteúdo normal (número real detectado) nunca
                 # tem esse bloco decorativo, então não precisa dessa checagem.
                 page_number_was_inferred = not (page_conf > 0.90)
-
-                if page_conf > 0.90:
-                    # Número detectado com confiança real -- essa é a âncora
-                    # confiável pra continuar a sequência nas próximas páginas
-                    # sem número.
-                    if printed_label.isdigit():
-                        last_confirmed_page_num = int(printed_label)
-                elif last_confirmed_page_num is not None:
-                    # Nenhum número detectado nesta página: decide o fallback
-                    # verificando se há pelo menos uma linha de parágrafo
-                    # numerado (ex.: "1.\t...") em algum lugar da página --
-                    # só uma página de conteúdo real (abertura de capítulo)
-                    # avança a sequência; uma página "Notas" em branco repete
-                    # o último número confirmado.
-                    has_paragraph_content = False
-                    for b in raw_blocks:
-                        if b.get("type") != 0:
-                            continue
-                        for line in b.get("lines", []):
-                            line_text = "".join([s.get("text", "") for s in line.get("spans", [])]).strip()
-                            if line_text and PatternDetector.PARAGRAPH_PATTERN_TYPE_A.match(line_text):
-                                has_paragraph_content = True
-                                break
-                        if has_paragraph_content:
-                            break
-
-                    if has_paragraph_content:
-                        last_confirmed_page_num += 1
-                        # [inferência] BUG real encontrado com dado do usuario:
-                        # confirmado em DOIS pontos reais e distintos do livro
-                        # (paginas impressas "53" apos ultima confirmada par
-                        # "52", e "149"/"439" apos ultima confirmada IMPAR
-                        # "147"/"437") que a pagina de abertura de capitulo
-                        # sempre cai em numero IMPAR -- convencao tipografica
-                        # comum de capitulo comecar em pagina recto (impar).
-                        # Quando a ultima confirmada e impar, o proximo numero
-                        # (par) fica "absorvido" por uma das paginas em branco
-                        # sem conteudo proprio, e a abertura pula direto pro
-                        # impar seguinte. NAO verificado exaustivamente nas
-                        # 536 paginas do livro -- baseado no padrao confirmado
-                        # nessas transicoes reais.
-                        if last_confirmed_page_num % 2 == 0:
-                            last_confirmed_page_num += 1
-                    printed_label = str(last_confirmed_page_num)
-                    page_conf = 0.85  # marca como inferido (menor que detecção real, mas acima do fallback bruto antigo)
 
                 cursor.execute(
                     "INSERT INTO pages (document_id, pdf_page_index, printed_page_label, confidence) VALUES (?, ?, ?, ?)",
@@ -167,6 +117,22 @@ class ParagraphIndexer(BaseIndexer):
                 # nesta pagina.
                 seen_paragraph_start_this_page = False
 
+                # BUG real encontrado com PDF de amostra do usuario: quando
+                # o capitulo novo começa com texto de introdução SEM numero
+                # nenhum (nao com "1." de cara -- ex.: "Buenos días, amigos.
+                # Es un privilegio..." antes do primeiro "2."), o paragrafo
+                # do capitulo ANTERIOR nunca fechava (só fecha quando um
+                # "N." novo aparece) -- entao esse texto de abertura ficava
+                # colado no final do ULTIMO paragrafo do capitulo anterior,
+                # em vez de virar sua própria entrada "Intro/Capa" do
+                # capitulo novo. Corrigido: assim que o PRIMEIRO bloco
+                # decorativo desta página é filtrado (título/autor/data --
+                # sinal confiável de que é uma página de abertura de
+                # capítulo), o parágrafo que estava aberto é fechado ali
+                # mesmo, pra próxima linha de conteúdo real abrir uma
+                # "Intro/Capa" nova, e não continuar o capítulo anterior.
+                chapter_boundary_closed_this_page = False
+
                 for b in blocks:
                     bbox = b.get("bbox")
                     for line in b.get("lines", []):
@@ -174,12 +140,72 @@ class ParagraphIndexer(BaseIndexer):
                         if not line_text:
                             continue
 
+                        # BUG real encontrado com PDF de amostra do usuario:
+                        # a letra capitular decorativa (inicial grande de um
+                        # sermao, ex.: "M" de "Muy asombrado...") vem numa
+                        # linha PROPRIA, separada do resto da palavra, e com
+                        # fonte bem maior que o corpo (~34pt vs ~12pt aqui).
+                        # Ela NAO pode ser tratada como bloco decorativo
+                        # descartavel (o filtro logo abaixo faria isso, ja
+                        # que tambem e "fonte maior que o corpo") -- ela E
+                        # conteudo real, só que quebrada em dois pedacos pelo
+                        # PDF. Fica em espera aqui e é colada, sem espaço, no
+                        # começo da PRÓXIMA linha de texto real (ver uso de
+                        # `pending_dropcap_prefix` abaixo) -- reconstituindo
+                        # "M" + "uy asombrado" -> "Muy asombrado".
+                        line_size_check = self._line_font_size(line)
+                        if (
+                            len(line_text) == 1
+                            and line_text.isalpha()
+                            and body_font_size
+                            and line_size_check >= 1.12 * body_font_size
+                        ):
+                            pending_dropcap_prefix += line_text
+                            continue
+
                         if page_number_was_inferred and not seen_paragraph_start_this_page and bbox:
                             block_width = bbox[2] - bbox[0]
                             block_center = (bbox[0] + bbox[2]) / 2.0
                             page_center = width / 2.0
-                            if block_width < 0.55 * width and abs(block_center - page_center) < 0.08 * width:
+                            is_narrow_centered = (
+                                block_width < 0.55 * width and abs(block_center - page_center) < 0.08 * width
+                            )
+
+                            # BUG real encontrado com PDF de amostra do usuario
+                            # (livro "La Palabra Hablada"/"Las Edades"): o
+                            # bloco decorativo de abertura de capitulo (titulo,
+                            # nome do autor, data/local) nem sempre e
+                            # estreito+centralizado como no "Los Siete Sellos"
+                            # -- nesse livro e um bloco LARGO (varias linhas
+                            # ocupando quase a largura toda), entao escapava do
+                            # filtro acima e vazava pro final do ultimo
+                            # paragrafo ainda aberto (do capitulo ANTERIOR).
+                            # Confirmado no PDF real: titulo/autor/data usam
+                            # fonte negrito/italico e/ou tamanho MAIOR que o
+                            # corpo do texto (ex.: titulo a 18pt vs corpo a
+                            # ~10.5pt; autor/data a 14pt vs corpo a 12pt; a
+                            # letra capitular decorativa de abertura, ainda
+                            # maior, a ~34pt). Detectado comparando o tamanho
+                            # da fonte desta linha com o tamanho "tipico" do
+                            # corpo do texto (calculado uma vez pro documento
+                            # inteiro, ver `_resolve_page_labels`) -- 12% maior
+                            # ja e sinal suficiente, sem depender de largura ou
+                            # centralizacao nenhuma.
+                            line_size = self._line_font_size(line)
+                            is_off_size = bool(body_font_size) and line_size >= 1.12 * body_font_size
+
+                            if is_narrow_centered or is_off_size:
+                                if not chapter_boundary_closed_this_page and current_para_id is not None:
+                                    self._close_paragraph(cursor, current_para_id, doc_id, printed_label, current_para_text)
+                                    current_para_id = None
+                                    current_para_num = None
+                                    current_para_text = []
+                                    chapter_boundary_closed_this_page = True
                                 continue
+
+                        if pending_dropcap_prefix:
+                            line_text = pending_dropcap_prefix + line_text
+                            pending_dropcap_prefix = ""
 
                         res = PatternDetector.analyze_text_span(
                             line_text, bbox, width, height,
@@ -236,6 +262,230 @@ class ParagraphIndexer(BaseIndexer):
 
             conn.commit()
         return True
+
+    def _resolve_page_labels(self, doc):
+        """Primeira passada (só leitura, nenhuma gravação): decide o rótulo de
+        página impressa final pra cada página do documento, ANTES de extrair
+        parágrafo nenhum.
+
+        BUG real encontrado com PDF de amostra do usuário (livro "La Palabra
+        Hablada" -- cada capítulo é um sermão separado, com parágrafos
+        renumerados a partir de "1." em cada um, mas a numeração de PÁGINA é
+        contínua pelo livro todo): a lógica antiga só conseguia inferir o
+        rótulo de uma página sem número impresso comparando com o "último
+        número confirmado" (`last_confirmed_page_num`) -- e nas primeiras
+        páginas do livro (capa, ficha técnica, página de abertura do 1º
+        sermão, ANTES de qualquer número real já ter sido visto), esse valor
+        ainda é `None`. Isso fazia essas páginas caírem no fallback bruto
+        `page_idx + 1` como se fosse um número confiável (mesma confiança
+        0.90 de uma página sem detecção nenhuma) -- ex. real confirmado
+        nesta amostra: a 3ª página física do PDF (índice 2, sem número
+        impresso) já tem texto de dois parágrafos numerados ("2.", "3.") do
+        1º sermão, mas era gravada com o rótulo "3" (índice cru do PDF) em
+        vez do número real da página impressa (que só aparece 1 página
+        depois, como "56" -- ou seja, essa página 3ª/índice 2 deveria ser
+        rotulada "55"). Isso faz esse conteúdo real ficar indexado sob um
+        número de página que não existe no livro de verdade -- busca pelo
+        número real não encontra nada, e busca pelo número errado (aqui,
+        "3") devolve um resultado que não bate com a página física
+        correspondente.
+
+        Corrigido com uma segunda passada, que só é possível porque agora o
+        documento inteiro é lido ANTES de resolver qualquer rótulo (a versão
+        antiga resolvia em streaming, uma página de cada vez, sem enxergar
+        adiante): as páginas sem número são resolvidas em blocos, entre duas
+        âncoras confirmadas (ou antes da 1ª / depois da última). Quando um
+        bloco fica entre duas âncoras e a quantidade de páginas bate
+        exatamente com a quantidade de números faltando, a resposta é
+        calculada por contagem direta (sem depender de heurística nenhuma).
+        Só quando a contagem não bate (ou o bloco está no início/fim do
+        documento, sem âncora dos dois lados) entra a heurística antiga
+        (página sem parágrafo numerado não consome número / página com
+        parágrafo numerado consome 1, com a correção de página de abertura
+        cair em ímpar) -- ver `fill_run` abaixo pra detalhes de cada caso.
+
+        [inferência] Essa extrapolação pra trás usa a mesma regra já
+        confirmada pro MEIO do livro, mas não foi confirmada contra um
+        número de página real impresso ANTES do início desta amostra (o
+        arquivo de amostra começa exatamente nessas páginas) -- ou seja, o
+        valor calculado pras páginas iniciais do livro é a melhor estimativa
+        possível com o padrão já visto, não uma confirmação direta. Vale
+        conferir no app, após reimportar, se o número calculado pra essas
+        primeiras páginas bate com o livro impresso de verdade.
+        """
+        num_pages = len(doc)
+        raw_blocks_cache = [None] * num_pages
+        detected_label = [None] * num_pages
+        detected_conf = [0.0] * num_pages
+        has_content = [False] * num_pages
+
+        # Tamanho de fonte "tipico" do corpo do texto no documento inteiro --
+        # usado (ver corpo do metodo index_document) pra reconhecer bloco
+        # decorativo de abertura de capitulo (titulo/autor/data, ou letra
+        # capitular) por ter fonte visivelmente MAIOR que o corpo, mesmo
+        # quando o bloco nao e estreito/centralizado. Calculado como a
+        # mediana ponderada por quantidade de caracteres (nao a media nem a
+        # moda simples) pra nao ser distorcida por poucas linhas de titulo em
+        # fonte grande nem por pequena variacao de tamanho entre linhas do
+        # proprio corpo (comum em texto justificado, ex.: 10.3 vs 10.9) --
+        # como o corpo do texto sempre domina a contagem de caracteres do
+        # livro, a mediana pondera cai dentro da faixa do corpo mesmo com
+        # esse jitter.
+        size_weight_pairs = []
+
+        for page_idx in range(num_pages):
+            page = doc[page_idx]
+            width, height = page.rect.width, page.rect.height
+            raw_blocks = page.get_text("dict").get("blocks", [])
+            raw_blocks_cache[page_idx] = (raw_blocks, width, height)
+
+            best_label = None
+            best_conf = 0.90
+            for b in raw_blocks:
+                if b.get("type") != 0:
+                    continue
+                for line in b.get("lines", []):
+                    line_text = "".join([s.get("text", "") for s in line.get("spans", [])]).strip()
+                    if not line_text:
+                        continue
+                    res = PatternDetector.analyze_text_span(line_text, b.get("bbox", [0, 0, 0, 0]), width, height)
+                    if res["is_page_number_candidate"] and res["confidence_page_label"] > best_conf:
+                        best_label = res["detected_label"]
+                        best_conf = res["confidence_page_label"]
+                    if PatternDetector.PARAGRAPH_PATTERN_TYPE_A.match(line_text):
+                        has_content[page_idx] = True
+                    line_size = ParagraphIndexer._line_font_size(line)
+                    if line_size:
+                        size_weight_pairs.append((line_size, len(line_text)))
+            if best_label is not None:
+                detected_label[page_idx] = best_label
+                detected_conf[page_idx] = best_conf
+
+        final_labels = [None] * num_pages
+        final_confs = [0.0] * num_pages
+
+        # Índices de TODAS as páginas com número confirmado no documento
+        # inteiro -- ter essa lista completa ANTES de resolver qualquer
+        # página sem número (só é possível porque agora é uma segunda
+        # passada, com o documento inteiro já lido) é o que permite a
+        # melhoria abaixo em relação à versão antiga (que só enxergava pra
+        # trás, uma página de cada vez, em streaming).
+        anchor_indices = [i for i in range(num_pages) if detected_label[i] is not None and detected_label[i].isdigit()]
+        for i in anchor_indices:
+            final_labels[i] = detected_label[i]
+            final_confs[i] = detected_conf[i]
+
+        def fill_forward_heuristic(run, start_num):
+            """Avança 1 número por página com parágrafo detectado (com
+            correção de abertura de capítulo cair em ímpar), repete o último
+            número em página sem conteúdo -- a regra original, confirmada no
+            livro "La Revelación de Los Siete Sellos" (páginas "Notas" extras
+            desta edição, que não fazem parte da paginação original, não
+            consomem número). Usada só quando NÃO dá pra reconciliar a
+            contagem exata (ver fill_reconciled abaixo), que é mais confiável
+            quando disponível."""
+            cur = start_num
+            for j in run:
+                if has_content[j]:
+                    cur += 1
+                    if cur % 2 == 0:
+                        cur += 1
+                final_labels[j] = str(cur)
+                final_confs[j] = 0.85
+
+        def fill_backward_heuristic(run, end_num):
+            """Espelho de fill_forward_heuristic, de trás pra frente -- único
+            recurso possível pra páginas ANTES da 1ª âncora do livro inteiro
+            (capa/ficha técnica/abertura do 1º capítulo), onde não existe
+            nenhum número confirmado anterior pra reconciliar contagem."""
+            cur = end_num
+            for j in reversed(run):
+                if has_content[j]:
+                    cur -= 1
+                    if cur % 2 == 0:
+                        cur -= 1
+                final_labels[j] = str(cur)
+                final_confs[j] = 0.85
+
+        def fill_run(run, left_num, right_num):
+            if not run:
+                return
+            if left_num is not None and right_num is not None:
+                gap = right_num - left_num - 1
+                if gap == len(run):
+                    # BUG real encontrado com 2ª amostra do usuário (livro
+                    # "Las Edades"/"La Palabra Hablada", capítulos sobre as
+                    # igrejas de Éfeso/Esmirna): entre as páginas confirmadas
+                    # "109" e "112" havia 2 páginas sem número -- uma em
+                    # branco (sem parágrafo nenhum) e uma de abertura de
+                    # capítulo (com parágrafo). A regra antiga (só avançar em
+                    # página COM conteúdo) fazia a página em branco "repetir"
+                    # 109 em vez de virar 110, e a de abertura virar 111 --
+                    # sobrando o número 110 sem nenhuma página, silenciosamente.
+                    # Quando dá pra CONTAR exatamente quantos números faltam
+                    # (112-109-1 = 2) e esse total bate com o número de
+                    # páginas sem rótulo nesse intervalo (2), a contagem exata
+                    # é usada diretamente -- sem depender de heurística de
+                    # conteúdo nenhuma, porque nesse caso a resposta certa é
+                    # matematicamente garantida (cada página física recebe,
+                    # em ordem, um dos números que faltam).
+                    for offset, j in enumerate(run):
+                        final_labels[j] = str(left_num + 1 + offset)
+                        final_confs[j] = 0.88
+                    return
+                # Contagem não bate (mais ou menos páginas físicas do que
+                # números faltando) -- reconciliação exata não é possível
+                # com certeza; cai pra heurística de conteúdo, ancorada pela
+                # esquerda (mesmo comportamento de antes).
+                fill_forward_heuristic(run, left_num)
+                return
+            if left_num is not None:
+                # Trecho no FINAL do documento, sem nenhuma âncora depois --
+                # só dá pra seguir em frente com a heurística de conteúdo.
+                fill_forward_heuristic(run, left_num)
+                return
+            if right_num is not None:
+                # Trecho no INÍCIO do documento (antes da 1ª âncora do livro
+                # inteiro) -- não há como reconciliar contagem (não sabemos
+                # quantas páginas vieram antes desta amostra/deste livro), só
+                # dá pra extrapolar pra trás com a heurística de conteúdo.
+                # [inferência] ver nota detalhada na docstring do método.
+                fill_backward_heuristic(run, right_num)
+                return
+            # Caso extremo (não esperado num livro real): documento inteiro
+            # sem NENHUM número de página confirmado -- usa o índice cru
+            # como último recurso, com confiança BAIXA (0.5, abaixo do
+            # limiar de 0.90 usado em todo o resto do código) pra não ser
+            # confundido com um número real ou inferido de verdade.
+            for j in run:
+                final_labels[j] = str(j + 1)
+                final_confs[j] = 0.5
+
+        # Preenche o trecho ANTES da 1ª âncora, cada trecho ENTRE duas
+        # âncoras consecutivas, e o trecho DEPOIS da última âncora.
+        cursor_idx = 0
+        prev_num = None
+        for anchor_idx in anchor_indices:
+            run = list(range(cursor_idx, anchor_idx))
+            fill_run(run, prev_num, int(detected_label[anchor_idx]))
+            prev_num = int(detected_label[anchor_idx])
+            cursor_idx = anchor_idx + 1
+        if cursor_idx < num_pages:
+            fill_run(list(range(cursor_idx, num_pages)), prev_num, None)
+
+        body_font_size = None
+        if size_weight_pairs:
+            size_weight_pairs.sort(key=lambda pair: pair[0])
+            total_weight = sum(weight for _, weight in size_weight_pairs)
+            half_weight = total_weight / 2.0
+            cumulative = 0
+            for size, weight in size_weight_pairs:
+                cumulative += weight
+                if cumulative >= half_weight:
+                    body_font_size = size
+                    break
+
+        return final_labels, final_confs, raw_blocks_cache, body_font_size
 
     def _start_paragraph(self, cursor, page_id: int, paragraph_number: str) -> int:
         """Cria a linha em paragraphs e retorna o id (o texto é preenchido depois, em _close_paragraph).

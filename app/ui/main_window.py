@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QMessageBox, QHeaderView, QSplitter, QInputDialog,
     QApplication
 )
-from PySide6.QtCore import Qt, QObject, QThread, Signal
+from PySide6.QtCore import Qt, QObject, QThread, QTimer, Signal
 from PySide6.QtGui import QIcon, QPixmap, QFont
 
 from app.database.connection import DatabaseConnection
@@ -99,6 +99,12 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(body, stretch=1)
 
         self.current_results = []
+        self._last_edited_field = None
+        self._search_had_page_and_number_filters = False
+        self._search_is_fallback_retry = False
+
+    def _set_last_edited_field(self, field_name: str):
+        self._last_edited_field = field_name
 
     def _build_header(self):
         header = QWidget()
@@ -183,6 +189,15 @@ class MainWindow(QMainWindow):
         self.txt_page = QLineEdit()
         self.txt_page.setPlaceholderText("ex: 14A")
         self.txt_page.returnPressed.connect(self._perform_search)
+        # PEDIDO REAL do usuário: se ele digita uma página, pesquisa, e
+        # depois digita um parágrafo/extrato SEM apagar a página antiga,
+        # a busca combinada (página E parágrafo) pode não bater --
+        # sobrando um campo "esquecido" de uma busca anterior e a busca
+        # não retorna nada. textEdited (só dispara quando o USUÁRIO digita,
+        # não quando o código faz setText/clear) grava qual campo foi
+        # editado por último, usado em _on_search_finished pra tentar de
+        # novo priorizando esse campo, ver comentário lá.
+        self.txt_page.textEdited.connect(lambda: self._set_last_edited_field("page"))
         search_box.addWidget(self.lbl_page)
         search_box.addWidget(self.txt_page)
 
@@ -206,6 +221,7 @@ class MainWindow(QMainWindow):
         self.txt_para = QLineEdit()
         self.txt_para.setPlaceholderText("ex: 140")
         self.txt_para.returnPressed.connect(self._perform_search)
+        self.txt_para.textEdited.connect(lambda: self._set_last_edited_field("para"))
         search_box.addWidget(self.lbl_para)
         search_box.addWidget(self.txt_para)
 
@@ -213,6 +229,7 @@ class MainWindow(QMainWindow):
         self.txt_entry = QLineEdit()
         self.txt_entry.setPlaceholderText("ex: 1057")
         self.txt_entry.returnPressed.connect(self._perform_search)
+        self.txt_entry.textEdited.connect(lambda: self._set_last_edited_field("entry"))
         search_box.addWidget(self.lbl_entry)
         search_box.addWidget(self.txt_entry)
 
@@ -380,6 +397,7 @@ class MainWindow(QMainWindow):
         self.current_results = []
         self.txt_detail.clear()
         self.lbl_detail_header.setText("Nenhum resultado encontrado")
+        self._last_edited_field = None
 
     def _import_pdf(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Selecionar PDF", "", "Arquivos PDF (*.pdf)")
@@ -496,7 +514,7 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- Busca
 
-    def _perform_search(self):
+    def _perform_search(self, _is_fallback_retry: bool = False):
         idx = self.combo_docs.currentIndex()
         if idx < 0:
             return
@@ -507,6 +525,23 @@ class MainWindow(QMainWindow):
         entry = self.txt_entry.text().strip() or None
         text = self.txt_text.text().strip() or None
         fuzzy = self.chk_fuzzy.isChecked()
+
+        # PEDIDO REAL do usuário: digitar uma página, pesquisar, e depois
+        # digitar um parágrafo/extrato SEM apagar a página anterior fazia
+        # a busca combinada (página E parágrafo/extrato, ver
+        # SearchEngine.search) não encontrar nada -- o campo "antigo"
+        # ficava sobrando e não batia com o campo novo. A combinação
+        # Página+Parágrafo continua existindo de propósito (é usada pra
+        # desambiguar um parágrafo que se repete em mais de uma página,
+        # ver tests/test_paragraph_page_aggregation.py), então não dá pra
+        # simplesmente ignorar um dos dois campos sempre -- só quando a
+        # combinação não encontra nada é que tentamos de novo usando só o
+        # campo editado por ÚLTIMO (_last_edited_field, gravado por
+        # textEdited nos campos Página/Parágrafo/Extrato). Guardamos aqui
+        # se essa busca tinha os dois tipos de campo preenchidos, pra
+        # decidir em _on_search_finished se vale a pena tentar de novo.
+        self._search_had_page_and_number_filters = bool(page) and bool(para or entry)
+        self._search_is_fallback_retry = _is_fallback_retry
 
         # Guarda os termos usados nesta busca e o título do documento --
         # usados em _on_search_finished para gravar no Histórico de
@@ -545,6 +580,34 @@ class MainWindow(QMainWindow):
         self._search_thread.start()
 
     def _on_search_finished(self, results):
+        # Ver comentário em _perform_search: se a busca combinada
+        # (página + parágrafo/extrato) não achou nada, tenta de novo
+        # automaticamente usando só o campo editado por último, limpando
+        # o outro campo (que provavelmente ficou de uma busca anterior).
+        # _search_is_fallback_retry evita repetir isso indefinidamente.
+        if (
+            not results
+            and self._search_had_page_and_number_filters
+            and not self._search_is_fallback_retry
+            and self._last_edited_field in ("page", "para", "entry")
+        ):
+            if self._last_edited_field == "page":
+                self.txt_para.clear()
+                self.txt_entry.clear()
+            else:
+                self.txt_page.clear()
+            # QTimer.singleShot(0, ...) em vez de chamar _perform_search
+            # direto: essa função roda como reação ao sinal "finished" da
+            # busca anterior, cuja QThread ainda está terminando de
+            # desligar (quit -> finished -> deleteLater, tudo assíncrono).
+            # Criar/iniciar uma QThread NOVA nesse exato instante, ainda
+            # dentro do mesmo slot, derrubava o app ("QThread: Destroyed
+            # while thread is still running"). Adiar pro próximo ciclo do
+            # loop de eventos dá tempo da thread anterior finalizar antes
+            # de começarmos a próxima.
+            QTimer.singleShot(0, lambda: self._perform_search(_is_fallback_retry=True))
+            return
+
         self.current_results = results
 
         self.table.setRowCount(0)

@@ -52,6 +52,60 @@ if errorlevel 1 (
 )
 echo.
 
+REM ---------------------------------------------------------------
+REM BUG real reportado pelo usuario: rodar este .bat depois de trocar
+REM os arquivos da pasta pelo conteudo do zip mais novo (v2.6.2 em
+REM diante) sempre dava "Everything up-to-date", mesmo com arquivos
+REM visivelmente diferentes -- porque este .bat so fazia "git push",
+REM nunca "git add"/"git commit". Os arquivos do zip chegam SEM
+REM historico do Git (o zip e gerado sem a pasta ".git", de proposito,
+REM pra nao vazar o repositorio inteiro em cada entrega); a pasta
+REM rastreada pelo Git no PC do usuario nunca "sabia" que esses
+REM arquivos tinham mudado, entao nao havia commit novo nenhum pra
+REM enviar. Corrigido comitando (e criando a tag de versao, lida
+REM direto de app\version.py) ANTES de enviar.
+echo Verificando se ha arquivos novos/alterados...
+git add -A
+git diff --cached --quiet
+if not errorlevel 1 (
+    echo Nenhuma mudanca nova encontrada -- pasta ja identica ao ultimo
+    echo commit local. Pulando commit, indo direto pro envio.
+    echo.
+    goto :enviar
+)
+
+set VERSION=
+for /f "tokens=2 delims== " %%v in ('findstr /b "APP_VERSION" app\version.py') do set VERSION=%%v
+set VERSION=%VERSION:"=%
+set VERSION=%VERSION: =%
+
+if "%VERSION%"=="" (
+    echo Nao consegui ler a versao em app\version.py -- comitando sem tag automatica.
+    git commit -m "Atualizacao"
+) else (
+    echo Versao detectada em app\version.py: %VERSION%
+    git commit -m "Atualizacao v%VERSION%"
+)
+if errorlevel 1 (
+    echo.
+    echo [ERRO] Falha ao comitar as mudancas. Veja a mensagem acima.
+    pause
+    exit /b 1
+)
+echo.
+
+if not "%VERSION%"=="" (
+    git rev-parse "v%VERSION%" >nul 2>nul
+    if errorlevel 1 (
+        git tag "v%VERSION%"
+        echo Tag v%VERSION% criada.
+    ) else (
+        echo Tag v%VERSION% ja existia, nao recriei.
+    )
+    echo.
+)
+
+:enviar
 echo Enviando a branch "master"...
 git push origin master
 if errorlevel 1 (

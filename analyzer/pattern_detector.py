@@ -162,7 +162,69 @@ class PatternDetector:
     # RISCO CONHECIDO (não verificado): não testei o livro inteiro (só 89
     # das 536 páginas confirmadas até agora). Não tenho como garantir que
     # todo capítulo usa exatamente esse mesmo separador.
-    PARAGRAPH_PATTERN_TYPE_A = re.compile(r'^\s*(\d{1,4})\.(?:\t|\s*$)')
+    #
+    # SEGUNDO FORMATO confirmado com amostra real enviada pelo usuário de um
+    # livro DIFERENTE do mesmo perfil Tipo A ("Las Edades" / "La Palabra
+    # Hablada" -- edição de sermões sobre as sete igrejas do Apocalipse):
+    # aqui o separador NÃO é ponto+tab nenhum -- é só o número seguido de UM
+    # espaço comum, sem ponto ("2 Pues es muy bueno...", "16 Ahora, estaban
+    # pasando...", "279 ¿Qué fue lo que dijo..."). Confirmado em mais de 15
+    # parágrafos reais, em páginas diferentes da amostra, sequência numérica
+    # sempre crescente e consistente (2,3,4,5,6 / 16-21 / 279-292).
+    #
+    # Sem aceitar esse segundo formato, NENHUM parágrafo desse livro seria
+    # reconhecido como início de parágrafo -- o padrão antigo exige o ponto.
+    # O efeito seria grave: todo o conteúdo do livro ficaria acumulado numa
+    # única entrada "Intro/Capa" (a busca por parágrafo não encontraria
+    # nada, em NENHUMA página, não só numa página específica). [inferência]
+    # Isso é consistente com o relato original do usuário ("página 2 não
+    # aparece na busca") sobre esse mesmo livro, mas não foi confirmado
+    # rodando a busca de verdade contra o app -- só a inspeção direta do
+    # texto extraído do PDF de amostra.
+    #
+    # Pra não abrir mão da exigência de TAB no primeiro formato (que existe
+    # justamente pra evitar falso-positivo com frases comuns terminadas em
+    # ponto, ex. "...año 1963. Después..."), o segundo formato só é aceito
+    # quando o caractere logo após o espaço for maiúscula (ou abertura de
+    # interrogação/exclamação em espanhol, ¿/¡) -- suficiente pra rejeitar
+    # frases comuns que começam com número seguido de palavra minúscula
+    # (ex.: datas como "6 de agosto de 1961", "30 de julio de 1961" -- "de"
+    # é minúscula, não bate).
+    #
+    # RISCO CONHECIDO (não verificado): número solto no MEIO de uma citação
+    # (ex.: um versículo bíblico citado dentro do próprio parágrafo, que por
+    # acaso comece uma nova linha visual do PDF com número+maiúscula) pode
+    # ser confundido com início de um novo parágrafo. É o mesmo tipo de risco
+    # já aceito pelo padrão do Tipo B (número+traço) -- inerente a detectar
+    # por conteúdo de linha, sem visão do parágrafo inteiro.
+    #
+    # TERCEIRO FORMATO confirmado com PDF completo enviado pelo usuário
+    # (livro "Sobre las Alas de una Blanca Paloma", também perfil Tipo A):
+    # aqui o separador é "N. - " -- número, PONTO, espaço, traço, espaço
+    # (ex.: "1. - Señor Amado, te damos gracias..."), diferente tanto do
+    # formato "N.\t" (Los Siete Sellos) quanto do formato "N " sem ponto
+    # (Las Edades). Confirmado direto no texto extraído do PDF real: a
+    # linha inteira vem como "\t 1. - Señor Amado...". Sem esse terceiro
+    # formato, a primeira página do livro (que não imprime número --
+    # confirmado no PDF real, é a abertura do texto, antes do "2" aparecer
+    # na página seguinte) não seria reconhecida como "página com parágrafo",
+    # e herdaria por engano o número da página SEGUINTE -- exatamente a
+    # classe de bug já corrigida antes (páginas sem número), mas com uma
+    # 3ª variação de formato de parágrafo que ainda não tinha aparecido.
+    # AJUSTE no 3º formato (achado com o script tools/verificar_estrutura_pdf.py,
+    # ANTES do usuário relatar como bug de verdade): no mesmo livro "Sobre las
+    # Alas de una Blanca Paloma" (PDF completo), o parágrafo "164" vem como
+    # "164 . - Le dije..." -- com um ESPAÇO entre o número e o ponto -- enquanto
+    # os vizinhos 163 e 165 vêm sem esse espaço ("163. - ", "165. - "). Achado
+    # direto no texto extraído real (página impressa 22, índice 0 = 21):
+    # provável inconsistência de diagramação do PDF de origem, não do
+    # indexador. Sem tolerar esse espaço opcional, o parágrafo 164 não abre
+    # entrada própria e fica colado no final do texto do parágrafo 163.
+    # `\s*\.` (era só `\.`) tolera esse espaço sem abrir mão de nada que já
+    # funcionava (os outros dois formatos continuam intactos).
+    PARAGRAPH_PATTERN_TYPE_A = re.compile(
+        r'^\s*(\d{1,4})(?:\.(?:\t|\s*$)|\s+(?=[A-ZÁÉÍÓÚÑÜ¿¡])|\s*\.\s*[\-\–\—]\s+)'
+    )
 
     @classmethod
     def analyze_text_span(
@@ -255,10 +317,26 @@ class PatternDetector:
         # Isso substitui a antiga checagem por posição/zona da página, que se
         # mostrou incorreta no PDF real (corpo de extrato caindo dentro da
         # "zona" só por estar perto do topo/rodapé da página).
-        has_letters = any(c.isalpha() for c in clean_text)
+        # BUG real encontrado com PDF de amostra do usuário (livro "La
+        # Palabra Hablada"/"Setenta Semanas de Daniel"): a letra capitular
+        # decorativa no início de um sermão (ex.: um "M" grande sozinho,
+        # abrindo a palavra "Muy asombrado...") vem numa linha PRÓPRIA,
+        # separada do resto da palavra -- e uma letra sozinha bate no teste
+        # "clean_text == clean_text.upper()" (M == M), então era tratada
+        # como cabeçalho repetido do livro e DESCARTADA por inteiro. Efeito
+        # real: a busca mostrava "uy asombrado..." sem o M, cortando a
+        # primeira letra da primeira palavra do parágrafo.
+        # Corrigido exigindo pelo menos 2 letras na linha antes de aplicar
+        # esse heurístico -- título de cabeçalho de verdade sempre tem mais
+        # de uma letra (é um título, não uma letra solta); uma letra maiúscula
+        # sozinha (capitular, ou risco conhecido: um algarismo romano de
+        # capítulo tipo "I"/"V"/"X") nunca deveria ser tratada como "linha
+        # gritando em maiúsculas".
+        letter_count = sum(1 for c in clean_text if c.isalpha())
+        has_letters = letter_count > 0
         # clean_text == clean_text.upper() já garante que não há nenhuma
         # letra minúscula na linha (se houvesse, a comparação falharia).
-        is_all_caps = has_letters and clean_text == clean_text.upper()
+        is_all_caps = letter_count >= 2 and clean_text == clean_text.upper()
         if clean_text.upper() in cls.KNOWN_HEADER_TITLES or is_all_caps:
             result["is_header_or_footer"] = True
 
