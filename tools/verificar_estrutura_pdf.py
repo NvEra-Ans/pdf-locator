@@ -60,6 +60,18 @@ from app.indexing.paragraph_indexer import ParagraphIndexer
 _LEADING_DIGITS = re.compile(r'^\s*(\d{1,4})(.{0,4})')
 
 
+def _is_non_paragraph_numeric_line(clean: str) -> bool:
+    """Linhas começando com dígito que o detector real já trata em outro
+    lugar do pipeline (não são candidatas a parágrafo/extrato nenhum) --
+    ver comentário em cima do primeiro uso, dentro de analisar()."""
+    return bool(
+        PatternDetector.VERSE_REFERENCE_PATTERN.match(clean)
+        or PatternDetector.THOUSANDS_NUMBER_PATTERN.match(clean)
+        or PatternDetector.PAGE_NUMBER_PATTERN.match(clean)
+        or PatternDetector.PART_PAGE_LABEL_PATTERN.match(clean)
+    )
+
+
 def _signature_after_digits(clean_text: str) -> str:
     m = _LEADING_DIGITS.match(clean_text)
     if not m:
@@ -141,11 +153,21 @@ def analisar(pdf_path: str, tipo: str):
 
         if not clean[0].isdigit():
             continue
-        # Mesmas exclusões que o detector real usa antes de checar padrão de
-        # parágrafo (referência bíblica "cap:versículo" e número de milhar
-        # "300.000") -- senão essas linhas aparecem como "não reconhecidas"
-        # por engano, quando na verdade são corretamente ignoradas.
-        if PatternDetector.VERSE_REFERENCE_PATTERN.match(clean) or PatternDetector.THOUSANDS_NUMBER_PATTERN.match(clean):
+        # Mesmas exclusões que o detector real usa ANTES de checar padrão de
+        # parágrafo -- senão essas linhas aparecem como "não reconhecidas"
+        # por engano, quando na verdade já são corretamente tratadas em
+        # outro lugar do pipeline real:
+        #   - referência bíblica "cap:versículo" e número de milhar "300.000";
+        #   - número de página SOZINHO na linha (ex.: "2", "3") -- reconhecido
+        #     pelo PAGE_NUMBER_PATTERN, checado ANTES do padrão de parágrafo
+        #     em analyze_text_span (ver PatternDetector). BUG do próprio
+        #     script, achado na 1ª vez que rodei contra um PDF real
+        #     (livro "Demonología"): sem essa exclusão, toda página cujo
+        #     número aparece sozinho na linha virava uma falsa assinatura
+        #     "" (vazia) com dezenas de ocorrências, mascarando os sinais
+        #     de verdade no meio de ruído;
+        #   - marcador de Parte A/B (ex.: "7-A"), mesma lógica.
+        if _is_non_paragraph_numeric_line(clean):
             continue
         if active_pattern.match(clean):
             recognized += 1
@@ -169,7 +191,7 @@ def analisar(pdf_path: str, tipo: str):
         for page_idx, line, clean, bbox in _iter_lines(doc):
             if not clean[0:1].isdigit():
                 continue
-            if PatternDetector.VERSE_REFERENCE_PATTERN.match(clean) or PatternDetector.THOUSANDS_NUMBER_PATTERN.match(clean):
+            if _is_non_paragraph_numeric_line(clean):
                 continue
             if active_pattern.match(clean):
                 continue

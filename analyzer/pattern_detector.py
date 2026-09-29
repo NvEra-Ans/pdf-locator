@@ -222,8 +222,25 @@ class PatternDetector:
     # entrada própria e fica colado no final do texto do parágrafo 163.
     # `\s*\.` (era só `\.`) tolera esse espaço sem abrir mão de nada que já
     # funcionava (os outros dois formatos continuam intactos).
+    #
+    # 4º AJUSTE (achado com tools/verificar_estrutura_pdf.py, ANTES do
+    # usuário relatar como bug de verdade -- livro "Demonología", perfil
+    # Tipo A): o 2º formato ("N " sem ponto, exige maiúscula/¿/¡ logo após o
+    # espaço) não reconhecia parágrafos cujo texto abre com uma citação
+    # entre aspas curvas, ex.: '31 "Pero déjeme Ud. ir allá al África...'.
+    # Confirmado caractere por caractere no texto real: é U+201C (aspa
+    # dupla curva de abertura "“"), não aspa reta ("). Confirmado também
+    # que os 9 números afetados (31, 64, 70, 91, 94, 100, 117, 176, 206)
+    # encaixam exatamente na sequência -- o número anterior E o seguinte de
+    # cada um já eram reconhecidos normalmente -- ou seja, são parágrafos
+    # de verdade, não coincidência. Sem esse ajuste, cada um ficava colado
+    # no final do texto do parágrafo anterior. `[\"“‘«]?`
+    # tolera uma aspa opcional (reta, curva de abertura, aspa simples de
+    # abertura, ou "«") entre o espaço e a maiúscula/¿/¡ exigida -- não
+    # relaxa a exigência de maiúscula/¿/¡ em si, só permite uma aspa antes
+    # dela.
     PARAGRAPH_PATTERN_TYPE_A = re.compile(
-        r'^\s*(\d{1,4})(?:\.(?:\t|\s*$)|\s+(?=[A-ZÁÉÍÓÚÑÜ¿¡])|\s*\.\s*[\-\–\—]\s+)'
+        r'^\s*(\d{1,4})(?:\.(?:\t|\s*$)|\s+(?=[\"“‘«]?[A-ZÁÉÍÓÚÑÜ¿¡])|\s*\.\s*[\-\–\—]\s+)'
     )
 
     @classmethod
