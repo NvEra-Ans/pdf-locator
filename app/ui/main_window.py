@@ -130,7 +130,9 @@ class MainWindow(QMainWindow):
         title_box.setSpacing(0)
         title = QLabel(APP_NAME_SHORT)
         title.setObjectName("AppTitleLabel")
-        version = QLabel(f"Associação Missionária A Voz do Último Dia · v{APP_VERSION}")
+        # PEDIDO REAL do usuário: remover o nome da organização dessa área do
+        # cabeçalho, deixando só a versão.
+        version = QLabel(f"v{APP_VERSION}")
         version.setObjectName("AppVersionLabel")
         title_box.addWidget(title)
         title_box.addWidget(version)
